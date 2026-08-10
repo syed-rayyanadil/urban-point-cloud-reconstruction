@@ -1,0 +1,14 @@
+# Ignore dataset files and folders
+SensatUrban/
+SensatUrban_Out/
+*.ply
+*.npy
+
+# Ignore outputs & visualizations
+outputs/
+
+# Ignore Python cache & OS hidden files
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/

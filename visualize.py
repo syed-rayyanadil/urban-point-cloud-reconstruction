@@ -40,7 +40,8 @@ BASE_INPUT_FOLDER  = "../SensatUrban"       # Relative path for portable hard dr
 BASE_VIZ_OUTPUT    = os.path.join("outputs", "visualizations")
 SAMPLE_SPLIT       = "train"                # Which split to sample from
 SAMPLE_FILE_INDEX  = 0                      # Index of the .ply file to use as the visual sample
-                                            # (0 = first file found in the split folder)
+MAX_STAT_FILES     = 5                      # Maximum number of PLY files to parse for stats
+                                            # (Set to None to parse all files in split)
 
 # ==========================================
 # IMPORTS FROM THIS PROJECT
@@ -74,27 +75,34 @@ from utils.plot_utils import (
 
 
 # ==========================================
-# HELPER: COLLECT STATS ACROSS ALL FILES
+# HELPER: COLLECT STATS ACROSS FILES
 # ==========================================
-def _collect_dataset_stats(split_dir):
-    """Walk all .ply files in split_dir through the pipeline and collect:
+def _collect_dataset_stats(split_dir, max_files=MAX_STAT_FILES):
+    """Walk .ply files in split_dir through the pipeline and collect:
       - per-block point counts (before resampling)     → for histogram
-      - per-class point totals (across all sub-sampled clouds) → for bar chart
+      - per-class point totals (across sub-sampled clouds) → for bar chart
+
+    Args:
+        split_dir (str): Path to split directory containing .ply files.
+        max_files (int): Limit number of files to process for speed.
 
     Returns:
         block_point_counts (list[int]): Raw point count of each valid block.
-        class_totals       (dict)     : {class_id: total_points} across all files.
+        class_totals       (dict)     : {class_id: total_points} across parsed files.
     """
     ply_files = sorted([
         f for f in os.listdir(split_dir)
         if f.endswith('.ply') and not f.startswith('._')
     ])
 
+    if max_files is not None and max_files > 0:
+        ply_files = ply_files[:max_files]
+
     block_point_counts = []
     class_totals       = {cid: 0 for cid in range(13)}
     total_files        = len(ply_files)
 
-    print(f"\n  Collecting stats across {total_files} file(s) in '{split_dir}' ...")
+    print(f"\n  Collecting stats across {total_files} sampled file(s) in '{split_dir}' ...")
 
     for i, filename in enumerate(ply_files):
         print(f"    [{i+1}/{total_files}] {filename}")

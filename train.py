@@ -51,8 +51,8 @@ REPO_PATH = '/kaggle/working/urban-point-cloud-reconstruction'
 if os.path.exists(REPO_PATH) and REPO_PATH not in sys.path:
     sys.path.insert(0, REPO_PATH)
 
-from dataset import get_dataloader, SensatUrbanDataset
-from metrics import _ChamferLoss
+from sensat_dataset import get_dataloader, SensatUrbanDataset
+from sensat_metrics import _ChamferLoss
 
 # ==========================================
 # Weights & Biases (WandB) Setup

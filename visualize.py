@@ -49,7 +49,7 @@ MAX_STAT_FILES     = 5                      # Maximum number of PLY files to par
 # Add project root to path so imports work regardless of where you run this from
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dataset import hyperplane_cut, resample_pcd
+from sensat_dataset import hyperplane_cut, resample_pcd
 
 from preprocess import (
     read_ply_minimal,

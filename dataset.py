@@ -213,22 +213,16 @@ class SensatUrbanDataset(Dataset):
         # Resample Target to guarantee exact N_POINTS (handles edge cases)
         target = resample_pcd(points, self.n_points)                # [N, 3]
 
-        if self.is_train:
-            # Apply random 3D hyperplane cut through the block centroid
-            Pe_raw, Pm_raw = hyperplane_cut(
-                target,
-                min_points_side=MIN_POINTS_SIDE,
-                max_retry=MAX_RETRY_CUT
-            )
-            # Resample both partitions independently back to N_POINTS
-            Pe = resample_pcd(Pe_raw, self.n_points)   # [N, 3]
-            Pm = resample_pcd(Pm_raw, self.n_points)   # [N, 3]
-
-        else:
-            # Test split: zero-filled placeholders prevent collate_fn crashes
-            # (test set has no ground-truth labels for Pe/Pm computation)
-            Pe = np.zeros((self.n_points, 3), dtype=np.float32)    # [N, 3]
-            Pm = np.zeros((self.n_points, 3), dtype=np.float32)    # [N, 3]
+        # Apply random 3D hyperplane cut through the block centroid.
+        # Both train and test/validation splits are sliced dynamically.
+        Pe_raw, Pm_raw = hyperplane_cut(
+            target,
+            min_points_side=MIN_POINTS_SIDE,
+            max_retry=MAX_RETRY_CUT
+        )
+        # Resample both partitions independently back to N_POINTS
+        Pe = resample_pcd(Pe_raw, self.n_points)   # [N, 3]
+        Pm = resample_pcd(Pm_raw, self.n_points)   # [N, 3]
 
         # Build tensors — transpose to [3, N] if requested for 1D convolutions
         Pe_t     = self._maybe_transpose(torch.from_numpy(Pe).float())

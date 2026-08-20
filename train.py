@@ -4,16 +4,25 @@ train.py — HyperPocket VAE Training for SensatUrban Urban Point Cloud Completi
 Re-implements the HyperPocket architecture (Wu et al., 2020) in clean PyTorch
 for training on the preprocessed SensatUrban urban point cloud dataset.
 
-Architecture (faithful to original HyperPocket):
+Architecture (faithful to original HyperPocket — Appendix C):
     - Real Encoder (Ee)     : Encodes visible Pe into a deterministic real_mu vector.
     - Random Encoder (Em)   : Encodes missing Pm into (z, mu, logvar) — VAE branch.
     - HyperNetwork          : Takes concat(z_random, real_mu) → generates weights
                               for the TargetNetwork.
-    - TargetNetwork         : Implicitly decodes random 3D input points → reconstructed Pm.
+    - TargetNetwork         : Layer sizes: 3, 32, 64, 128, 64, 3 (per Appendix C).
 
 Loss Functions:
     - Reconstruction Loss   : Chamfer Distance (CD) between reconstructed & ground-truth Pm.
     - KL Divergence Loss    : Regularizes random encoder's latent distribution.
+
+Paper Reference:
+    Wu et al. (2020) "HyperPocket: Generative Point Cloud Completion"
+    Appendix C — Implementation Details:
+        - Target network: 3, 32, 64, 128, 64, 3
+        - Adam optimizer: lr=0.0001, β1=0.9, β2=0.999
+        - Progressive sphere normalization over 100 epochs
+        - StepLR scheduler: step=41, γ=0.01
+        - Latent vectors |ze| = |zm| = 128
 
 Usage (Kaggle Notebook Cell):
     exec(open('train.py').read())
@@ -46,30 +55,64 @@ from dataset import get_dataloader, SensatUrbanDataset
 from metrics import _ChamferLoss
 
 # ==========================================
-# CONFIGURATION (Edit for your Kaggle run)
+# Weights & Biases (WandB) Setup
+# ==========================================
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("[WARNING] wandb not installed. Run: pip install wandb")
+    print("[WARNING] Training will continue without WandB logging.\n")
+
+# ==========================================
+# CONFIGURATION — Matches HyperPocket Paper Appendix C
 # ==========================================
 CONFIG = {
     # Dataset
     'data_root'           : '/kaggle/input/sensaturban-out/SensatUrban_Out',
     'n_points'            : 1024,
-    'batch_size'          : 5,       # Matches HyperPocket paper (batch_size=5)
+    'batch_size'          : 5,
     'num_workers'         : 2,
 
-    # Model
-    'random_encoder_output_size' : 128,  # z_random dim (noise/latent) — Em output
-    'real_encoder_output_size'   : 128,  # z_real dim (deterministic) — Ee output
-    'latent_dim'                 : 256,  # concat(z_random, z_real) = 128+128 = 256
+    # Model — Appendix C: |ze| = |zm| = 128
+    'random_encoder_output_size' : 128,   # |zm| — Em latent dim (VAE)
+    'real_encoder_output_size'   : 128,   # |ze| — Ee latent dim (deterministic)
+    'latent_dim'                 : 256,   # concat(zm, ze) = 128 + 128 = 256
     'use_bias'                   : True,
     'relu_slope'                 : 0.2,
-    'target_network_layers'      : [128, 128, 128],  # Hidden layers in TargetNetwork
+    # Appendix C: "target network architecture — fully connected network
+    #              with following layer sizes: 3, 32, 64, 128, 64, 3"
+    'target_network_layers'      : [32, 64, 128, 64],
 
-    # Training
-    'epochs'              : 50,
+    # Training — Appendix C: Adam lr=0.0001, β1=0.9, β2=0.999
+    'epochs'              : 200,
     'learning_rate'       : 1e-4,
-    'loss_coef'           : 0.05,    # CD loss coefficient (matches HyperPocket default)
-    'kl_weight'           : 1.0,     # Weight for KL divergence term
-    'save_freq'           : 5,       # Save checkpoint every N epochs
-    'min_save_epoch'      : 5,       # Start saving from this epoch
+    'adam_beta1'          : 0.9,
+    'adam_beta2'          : 0.999,
+    'loss_coef'           : 0.05,     # CD loss coefficient (HyperPocket default)
+    'kl_weight'           : 1.0,      # Weight for KL divergence term
+
+    # Appendix C: StepLR scheduler (step=41, γ=0.01)
+    'scheduler_step_size' : 41,
+    'scheduler_gamma'     : 0.01,
+
+    # Appendix C: "target network input normalization so that after 100 epochs,
+    #              the target network input is sampled from a uniform unit 3D ball"
+    'progressive_norm_epochs' : 100,
+
+    # Early Stopping — do NOT trigger before epoch 100 (paper ran at least 100)
+    'early_stopping_patience'   : 30,    # Stop if val loss doesn't improve for 30 epochs
+    'early_stopping_min_epoch'  : 100,   # Never stop before epoch 100
+
+    # Checkpointing
+    'save_freq'           : 10,      # Save checkpoint every N epochs
+    'min_save_epoch'      : 10,      # Start saving from this epoch
+
+    # WandB
+    'wandb_project'       : 'HyperPocket-SensatUrban',
+    'wandb_run_name'      : None,    # Auto-generated if None
+    'use_wandb'           : True,    # Set False to disable WandB
 
     # Paths
     'save_dir'            : '/kaggle/working/checkpoints',
@@ -97,7 +140,7 @@ def setup_logging(log_dir):
 
 # ==========================================
 # HYPERPOCKET ARCHITECTURE
-# (Faithful reimplementation — no C++ extensions required)
+# (Faithful reimplementation per Appendix C — no C++ extensions required)
 # ==========================================
 
 class Encoder(nn.Module):
@@ -195,7 +238,7 @@ class HyperNetwork(nn.Module):
             Tensor: [B, sum(out_dims)] — concatenated weights for all TargetNetwork layers.
         """
         feat = self.backbone(latent)
-        return torch.cat([head(feat) for head in self.output_heads], dim=1)   # [B, total_weight_size]
+        return torch.cat([head(feat) for head in self.output_heads], dim=1)
 
 
 class TargetNetwork(nn.Module):
@@ -203,6 +246,8 @@ class TargetNetwork(nn.Module):
 
     Faithfully re-implements HyperPocket's model/target_network.py.
     Weights are dynamically provided by the HyperNetwork for each sample.
+
+    Appendix C layer sizes: 3, 32, 64, 128, 64, 3
     """
     def __init__(self, layer_channels, weights, use_bias=True):
         super().__init__()
@@ -244,33 +289,55 @@ class TargetNetwork(nn.Module):
         return x   # [N, 3]
 
 
-def generate_random_points(n_points, device):
-    """Sample random 3D input points from a unit sphere for the TargetNetwork.
+def generate_random_points(n_points, epoch, progressive_norm_epochs, device):
+    """Sample random 3D input points from a unit ball for the TargetNetwork.
 
-    Faithful reimplementation of HyperPocket's utils/points.py
-    `generate_points_from_uniform_distribution`.
+    Faithful reimplementation of HyperPocket's utils/points.py with
+    progressive normalization (Appendix C):
+        "target network input normalization so that after 100 epochs,
+         the target network input is sampled from a uniform unit 3D ball"
+
+    Points inside the ball that are closer to the center than the current
+    normalization coefficient are pushed outward to the sphere surface.
+    This progressively constrains the input space over training.
 
     Args:
-        n_points (int): Number of points to generate.
-        device   : torch device.
+        n_points              (int): Number of points to generate.
+        epoch                 (int): Current epoch (1-indexed).
+        progressive_norm_epochs(int): Number of epochs over which to progressively
+                                      normalize (100 per Appendix C).
+        device                     : torch device.
 
     Returns:
-        Tensor: [n_points, 3] unit-sphere input points.
+        Tensor: [n_points, 3] unit-ball input points with progressive normalization.
     """
+    # Sample uniform points from a unit 3D ball
     while True:
         pts = torch.zeros(n_points * 3, 3).uniform_(-1, 1)
         pts = pts[torch.norm(pts, dim=1) < 1]
         if pts.shape[0] >= n_points:
-            return pts[:n_points].to(device)
+            pts = pts[:n_points]
+            break
+
+    # Progressive normalization (per Appendix C)
+    if progressive_norm_epochs > 0:
+        norm_coef = min(epoch / progressive_norm_epochs, 1.0)
+        norms = torch.norm(pts, dim=1)
+        mask = norms < norm_coef
+        if mask.any():
+            # Push interior points to the normalization boundary sphere
+            pts[mask] = norm_coef * (pts[mask].T / norms[mask].clamp(min=1e-8)).T
+
+    return pts.to(device)
 
 
 class HyperPocketModel(nn.Module):
     """Full HyperPocket model combining both encoders, HyperNetwork, and TargetNetwork.
 
-    HyperPocket mode:
+    HyperPocket mode (Appendix C):
         - Em (random encoder, is_vae=True)  encodes Pm (missing) → (z_random, mu, logvar)
         - Ee (real encoder,   is_vae=False) encodes Pe (existing) → real_mu
-        - latent = concat(z_random, real_mu)
+        - latent = concat(z_random, real_mu)  [256-dim]
         - HyperNetwork(latent) → TargetNetwork weights
         - For each sample in batch: TargetNetwork(random_points) → reconstruction
     """
@@ -295,6 +362,7 @@ class HyperPocketModel(nn.Module):
         self.tn_layers  = tn_layers
         self.use_bias   = use_bias
         self.n_points   = cfg['n_points']
+        self.progressive_norm_epochs = cfg.get('progressive_norm_epochs', 100)
 
     def forward(self, pe, pm, epoch, device):
         """
@@ -335,14 +403,54 @@ class HyperPocketModel(nn.Module):
                 weights        = tn_weights_batch[j],
                 use_bias       = self.use_bias,
             )
-            random_pts        = generate_random_points(self.n_points, device)  # [N, 3]
-            recon_j           = tn(random_pts)                                  # [N, 3]
-            reconstruction[j] = recon_j.T                                       # [3, N]
+            # Progressive normalization applied to target network input (Appendix C)
+            random_pts        = generate_random_points(
+                self.n_points, epoch, self.progressive_norm_epochs, device
+            )                                                       # [N, 3]
+            recon_j           = tn(random_pts)                      # [N, 3]
+            reconstruction[j] = recon_j.T                           # [3, N]
 
         if self.training:
             return reconstruction, mu, logvar
         else:
             return reconstruction
+
+
+# ==========================================
+# EARLY STOPPING
+# ==========================================
+class EarlyStopping:
+    """Early stopping that respects a minimum epoch threshold.
+
+    Appendix C states training runs for at least 100 epochs
+    (progressive normalization completes at epoch 100).
+    Early stopping will NOT trigger before min_epoch.
+    """
+    def __init__(self, patience=30, min_epoch=100):
+        self.patience    = patience
+        self.min_epoch   = min_epoch
+        self.best_loss   = float('inf')
+        self.counter     = 0
+        self.best_epoch  = 0
+
+    def step(self, val_loss, epoch):
+        """Returns True if training should stop."""
+        if val_loss < self.best_loss:
+            self.best_loss  = val_loss
+            self.best_epoch = epoch
+            self.counter    = 0
+            return False
+
+        self.counter += 1
+
+        # Never stop before min_epoch
+        if epoch < self.min_epoch:
+            return False
+
+        return self.counter >= self.patience
+
+    def status_str(self):
+        return f'patience {self.counter}/{self.patience} | best @ epoch {self.best_epoch}'
 
 
 # ==========================================
@@ -513,19 +621,37 @@ def train(cfg=CONFIG):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'
 
+    # ---- WandB Init ----
+    use_wandb = cfg.get('use_wandb', True) and WANDB_AVAILABLE
+    if use_wandb:
+        run_name = cfg.get('wandb_run_name') or f'HP-SensatUrban-{datetime.now().strftime("%m%d-%H%M")}'
+        wandb.init(
+            project = cfg['wandb_project'],
+            name    = run_name,
+            config  = cfg,
+        )
+        log.info(f'  WandB         : ✓ Enabled — project={cfg["wandb_project"]}, run={run_name}')
+    else:
+        log.info(f'  WandB         : ✗ Disabled')
+
     log.info('=' * 70)
     log.info('  HyperPocket VAE — SensatUrban Urban Point Cloud Completion')
+    log.info('  Configuration aligned with Wu et al. (2020) Appendix C')
     log.info('=' * 70)
     log.info(f'  Device         : {device} ({gpu_name})')
     log.info(f'  Data Root      : {cfg["data_root"]}')
     log.info(f'  Epochs         : {cfg["epochs"]}')
     log.info(f'  Batch Size     : {cfg["batch_size"]}')
-    log.info(f'  Learning Rate  : {cfg["learning_rate"]}')
+    log.info(f'  Learning Rate  : {cfg["learning_rate"]} (β1={cfg["adam_beta1"]}, β2={cfg["adam_beta2"]})')
     log.info(f'  Loss Coef (CD) : {cfg["loss_coef"]}')
     log.info(f'  KL Weight      : {cfg["kl_weight"]}')
-    log.info(f'  Latent Dim     : {cfg["random_encoder_output_size"]} + '
-             f'{cfg["real_encoder_output_size"]} = {cfg["latent_dim"]}')
-    log.info(f'  TargetNet Arch : 3 → {cfg["target_network_layers"]} → 3')
+    log.info(f'  Latent Dim     : |zm|={cfg["random_encoder_output_size"]} + '
+             f'|ze|={cfg["real_encoder_output_size"]} = {cfg["latent_dim"]}')
+    log.info(f'  TargetNet Arch : 3 → {cfg["target_network_layers"]} → 3  (per Appendix C)')
+    log.info(f'  Scheduler      : StepLR(step={cfg["scheduler_step_size"]}, γ={cfg["scheduler_gamma"]})')
+    log.info(f'  Prog. Norm     : {cfg["progressive_norm_epochs"]} epochs')
+    log.info(f'  Early Stopping : patience={cfg["early_stopping_patience"]}, '
+             f'min_epoch={cfg["early_stopping_min_epoch"]}')
     log.info(f'  Log File       : {log_path}')
     log.info('=' * 70)
 
@@ -542,7 +668,7 @@ def train(cfg=CONFIG):
         as_tuple    = True,
     )
 
-    # Val loader (test split — Pe/Pm zero-filled, only gt matters)
+    # Val loader (test split)
     test_dataset = SensatUrbanDataset(
         split     = 'test',
         data_root = cfg['data_root'],
@@ -572,12 +698,31 @@ def train(cfg=CONFIG):
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f'  Model Params   : {total_params:,}')
 
-    # ---- Optimizer & Scheduler ----
-    optimizer = optim.Adam(model.parameters(), lr=cfg['learning_rate'])
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+    if use_wandb:
+        wandb.config.update({'total_params': total_params})
+
+    # ---- Optimizer (Appendix C: Adam, lr=0.0001, β1=0.9, β2=0.999) ----
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr    = cfg['learning_rate'],
+        betas = (cfg['adam_beta1'], cfg['adam_beta2']),
+    )
+
+    # ---- Scheduler (Appendix C: StepLR, step=41, γ=0.01) ----
+    scheduler = optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size = cfg['scheduler_step_size'],
+        gamma     = cfg['scheduler_gamma'],
+    )
 
     # ---- Loss Function ----
     cd_loss_fn = _ChamferLoss().to(device)
+
+    # ---- Early Stopping ----
+    early_stopper = EarlyStopping(
+        patience  = cfg['early_stopping_patience'],
+        min_epoch = cfg['early_stopping_min_epoch'],
+    )
 
     # ---- Training History ----
     train_losses = []   # List of [total, cd, kl] per epoch
@@ -597,11 +742,12 @@ def train(cfg=CONFIG):
         scheduler.step()
 
         epoch_time = time.time() - epoch_start
+        current_lr = scheduler.get_last_lr()[0]
 
         log.info(
             f'Epoch [{epoch:03d}/{cfg["epochs"]}] '
             f'Train → Total: {avg_loss:.5f} | CD: {avg_cd:.5f} | KL: {avg_kl:.5f} | '
-            f'LR: {scheduler.get_last_lr()[0]:.2e} | '
+            f'LR: {current_lr:.2e} | '
             f'Time: {epoch_time:.1f}s'
         )
 
@@ -616,6 +762,7 @@ def train(cfg=CONFIG):
                 'epoch'      : epoch,
                 'model_state': model.state_dict(),
                 'optim_state': optimizer.state_dict(),
+                'sched_state': scheduler.state_dict(),
                 'val_loss'   : val_cd,
                 'config'     : cfg,
             }, os.path.join(cfg['save_dir'], 'best_model.pth'))
@@ -624,7 +771,22 @@ def train(cfg=CONFIG):
             f'Epoch [{epoch:03d}/{cfg["epochs"]}] '
             f'Val  → CD: {val_cd:.5f} | Best Val CD: {best_val_loss:.5f}'
             + (' ← NEW BEST ✓' if is_best else '')
+            + f' | EarlyStop: {early_stopper.status_str()}'
         )
+
+        # --- WandB Logging ---
+        if use_wandb:
+            wandb_log = {
+                'epoch'          : epoch,
+                'train/total_loss': avg_loss,
+                'train/cd_loss'  : avg_cd,
+                'train/kl_loss'  : avg_kl,
+                'val/cd_loss'    : val_cd,
+                'val/best_cd'    : best_val_loss,
+                'learning_rate'  : current_lr,
+                'early_stop/patience_counter': early_stopper.counter,
+            }
+            wandb.log(wandb_log, step=epoch)
 
         # --- Save Periodic Checkpoint ---
         if epoch >= cfg['min_save_epoch'] and epoch % cfg['save_freq'] == 0:
@@ -633,6 +795,7 @@ def train(cfg=CONFIG):
                 'epoch'      : epoch,
                 'model_state': model.state_dict(),
                 'optim_state': optimizer.state_dict(),
+                'sched_state': scheduler.state_dict(),
                 'val_loss'   : val_cd,
             }, ckpt_path)
             log.info(f'  Checkpoint saved: {ckpt_path}')
@@ -650,14 +813,38 @@ def train(cfg=CONFIG):
                 )
                 log.info(f'  Reconstruction plot saved: {recon_plot}')
 
+            # Log images to WandB
+            if use_wandb:
+                wandb.log({
+                    'plots/loss_curves': wandb.Image(loss_plot),
+                    'plots/reconstruction': wandb.Image(recon_plot) if ex_np is not None else None,
+                }, step=epoch)
+
         log.info('')  # Blank line between epochs for readability
+
+        # --- Early Stopping Check ---
+        should_stop = early_stopper.step(val_cd, epoch)
+        if should_stop:
+            log.info('=' * 70)
+            log.info(f'  EARLY STOPPING triggered at epoch {epoch}!')
+            log.info(f'  Val CD has not improved for {early_stopper.patience} epochs '
+                     f'(best was at epoch {early_stopper.best_epoch}).')
+            log.info('=' * 70)
+            if use_wandb:
+                wandb.log({'early_stopped_at_epoch': epoch}, step=epoch)
+            break
 
     log.info('=' * 70)
     log.info(f'  Training Complete!')
-    log.info(f'  Best Validation CD Loss : {best_val_loss:.5f}')
+    log.info(f'  Total Epochs Trained    : {epoch}')
+    log.info(f'  Best Validation CD Loss : {best_val_loss:.5f} (epoch {early_stopper.best_epoch})')
     log.info(f'  Best model saved at     : {os.path.join(cfg["save_dir"], "best_model.pth")}')
     log.info(f'  Plots saved at          : {cfg["plot_dir"]}')
     log.info('=' * 70)
+
+    # --- WandB Finish ---
+    if use_wandb:
+        wandb.finish()
 
     return model, train_losses, val_losses
 

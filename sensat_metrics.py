@@ -101,9 +101,6 @@ class _ChamferLoss(nn.Module):
         # Extract only the diagonal (squared norms of each point)
         diag_ind_x = torch.arange(0, num_points_x, device=x.device, dtype=torch.long)
         diag_ind_y = torch.arange(0, num_points_y, device=y.device, dtype=torch.long)
-        
-        # Diagnostic prints to trace device mismatch
-        print(f"[Pairwise Distance Devices] x: {x.device} | y: {y.device} | xx: {xx.device} | yy: {yy.device} | diag_ind_x: {diag_ind_x.device} | diag_ind_y: {diag_ind_y.device}")
 
         # Expand norms to [B, M, N] for broadcasting
         rx = xx[:, diag_ind_x, diag_ind_x].unsqueeze(1).expand_as(zz.transpose(2, 1))

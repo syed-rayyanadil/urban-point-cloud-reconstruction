@@ -101,6 +101,9 @@ class _ChamferLoss(nn.Module):
         # Extract only the diagonal (squared norms of each point)
         diag_ind_x = torch.arange(0, num_points_x, device=x.device, dtype=torch.long)
         diag_ind_y = torch.arange(0, num_points_y, device=y.device, dtype=torch.long)
+        
+        # Diagnostic prints to trace device mismatch
+        print(f"[Pairwise Distance Devices] x: {x.device} | y: {y.device} | xx: {xx.device} | yy: {yy.device} | diag_ind_x: {diag_ind_x.device} | diag_ind_y: {diag_ind_y.device}")
 
         # Expand norms to [B, M, N] for broadcasting
         rx = xx[:, diag_ind_x, diag_ind_x].unsqueeze(1).expand_as(zz.transpose(2, 1))
@@ -331,25 +334,26 @@ class PointCloudEvaluator:
     # ------------------------------------------------------------------
     # 3. MINIMUM MATCHING DISTANCE (MMD)
     # ------------------------------------------------------------------
-    def compute_mmd(self, generated, reference):
+    def compute_mmd(self, generated, reference, max_refs=100, max_gens=500):
         """Compute Minimum Matching Distance (MMD) measuring generation fidelity.
 
-        For each reference shape Y in Sr, finds the closest generated shape
-        X in Sg by CD, and averages these minimum distances.
-
-        Formula (Wu et al., 2020):
-            MMD(Sg, Sr) = (1 / |Sr|) * sum_{Y in Sr} min_{X in Sg} CD(X, Y)
-
-        Args:
-            generated (Tensor): Generated completions, shape [k, N, 3].
-            reference (Tensor): Ground-truth references, shape [M, N, 3].
-
-        Returns:
-            float: MMD value. Lower = generated shapes are closer to real shapes.
+        Uses a representative subset for large test sets to avoid CPU-GPU
+        communication bottlenecks in nested Python loops.
         """
+        # Set random seed for reproducible evaluation
+        np.random.seed(42)
+        
+        if len(reference) > max_refs:
+            ref_idx = np.random.choice(len(reference), max_refs, replace=False)
+            reference = reference[ref_idx]
+            
+        if len(generated) > max_gens:
+            gen_idx = np.random.choice(len(generated), max_gens, replace=False)
+            generated = generated[gen_idx]
+
         total = 0.0
         for r in reference:
-            # For each reference shape, find the minimum CD among all k generated shapes
+            # For each reference shape, find the minimum CD among all generated shapes
             min_cd = min(self._cd_pair(g, r) for g in generated)
             total += min_cd
 

@@ -99,9 +99,8 @@ class _ChamferLoss(nn.Module):
         zz = torch.bmm(x, y.transpose(2, 1))   # [B, M, N]  cross term
 
         # Extract only the diagonal (squared norms of each point)
-        dtype      = torch.cuda.LongTensor if self.use_cuda else torch.LongTensor
-        diag_ind_x = torch.arange(0, num_points_x).type(dtype)
-        diag_ind_y = torch.arange(0, num_points_y).type(dtype)
+        diag_ind_x = torch.arange(0, num_points_x, device=x.device, dtype=torch.long)
+        diag_ind_y = torch.arange(0, num_points_y, device=y.device, dtype=torch.long)
 
         # Expand norms to [B, M, N] for broadcasting
         rx = xx[:, diag_ind_x, diag_ind_x].unsqueeze(1).expand_as(zz.transpose(2, 1))
@@ -267,9 +266,9 @@ class PointCloudEvaluator:
         Returns:
             float: Scalar Chamfer Distance value.
         """
-        # Add batch dimension for _ChamferLoss which expects [B, N, 3]
-        x_b = x.unsqueeze(0)   # [1, N, 3]
-        y_b = y.unsqueeze(0)   # [1, M, 3]
+        # Add batch dimension and move to device
+        x_b = x.unsqueeze(0).to(self.device)   # [1, N, 3]
+        y_b = y.unsqueeze(0).to(self.device)   # [1, M, 3]
         return self._cd_fn(x_b, y_b).item()
 
     # ------------------------------------------------------------------
@@ -317,9 +316,9 @@ class PointCloudEvaluator:
         total, count = 0.0, 0
         for g in generated:
             for r in reference:
-                # Expand to batched [1, N, 3] and compute
+                # Expand to batched [1, N, 3], move to device, and compute
                 emd_val = _sinkhorn_emd(
-                    g.unsqueeze(0), r.unsqueeze(0),
+                    g.unsqueeze(0).to(self.device), r.unsqueeze(0).to(self.device),
                     epsilon=EMD_EPSILON, max_iter=EMD_MAX_ITER
                 )
                 total += emd_val.item()

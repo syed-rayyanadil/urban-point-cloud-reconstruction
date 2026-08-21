@@ -364,13 +364,14 @@ class HyperPocketModel(nn.Module):
         self.n_points   = cfg['n_points']
         self.progressive_norm_epochs = cfg.get('progressive_norm_epochs', 100)
 
-    def forward(self, pe, pm, epoch, device):
+    def forward(self, pe, pm, epoch, device, noise=None):
         """
         Args:
             pe     (Tensor): Visible context,  [B, N, 3].
             pm     (Tensor): Missing target,   [B, N, 3].
             epoch  (int)   : Current epoch number (for progressive normalization).
             device         : torch device.
+            noise  (Tensor): Optional pre-sampled noise [B, rand_sz] to override Em.
 
         Returns (training):
             reconstruction (Tensor): [B, 3, N] reconstructed missing point cloud.
@@ -382,8 +383,13 @@ class HyperPocketModel(nn.Module):
         """
         B = pe.size(0)
 
-        # Em encodes Pm (missing target) — VAE branch (generativity)
-        z_random, mu, logvar = self.random_encoder(pm)   # [B, rand_sz]
+        if noise is None:
+            # Em encodes Pm (missing target) — VAE branch (generativity)
+            z_random, mu, logvar = self.random_encoder(pm)   # [B, rand_sz]
+        else:
+            # Override random encoder output with pre-sampled noise
+            z_random = noise
+            mu = logvar = None
 
         # Ee encodes Pe (visible context) — deterministic branch
         real_mu = self.real_encoder(pe)                   # [B, real_sz]

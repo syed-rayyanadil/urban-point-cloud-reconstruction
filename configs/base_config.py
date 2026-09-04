@@ -10,7 +10,7 @@ GLOBAL_BASE_CONFIG = {
     'data_root'                 : '/kaggle/input/sensaturban-out/SensatUrban_Out',
     'n_points'                  : 1024,
     'batch_size'                : 5,
-    'num_workers'               : 2,
+    'num_workers'               : 4,
 
     # Optimizer & Scheduler Defaults (Adam + StepLR per HyperPocket Appendix C)
     'epochs'                    : 200,

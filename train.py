@@ -53,6 +53,7 @@ if os.path.exists(REPO_PATH) and REPO_PATH not in sys.path:
 
 from sensat_dataset import get_dataloader, SensatUrbanDataset
 from sensat_metrics import _ChamferLoss
+from configs import get_config, list_available_configs
 
 # ==========================================
 # Weights & Biases (WandB) Setup
@@ -65,60 +66,8 @@ except ImportError:
     print("[WARNING] wandb not installed. Run: pip install wandb")
     print("[WARNING] Training will continue without WandB logging.\n")
 
-# ==========================================
-# CONFIGURATION — Matches HyperPocket Paper Appendix C
-# ==========================================
-CONFIG = {
-    # Dataset
-    'data_root'           : '/kaggle/input/sensaturban-out/SensatUrban_Out',
-    'n_points'            : 1024,
-    'batch_size'          : 5,
-    'num_workers'         : 2,
-
-    # Model — Appendix C: |ze| = |zm| = 128
-    'random_encoder_output_size' : 128,   # |zm| — Em latent dim (VAE)
-    'real_encoder_output_size'   : 128,   # |ze| — Ee latent dim (deterministic)
-    'latent_dim'                 : 256,   # concat(zm, ze) = 128 + 128 = 256
-    'use_bias'                   : True,
-    'relu_slope'                 : 0.2,
-    # Appendix C: "target network architecture — fully connected network
-    #              with following layer sizes: 3, 32, 64, 128, 64, 3"
-    'target_network_layers'      : [32, 64, 128, 64],
-
-    # Training — Appendix C: Adam lr=0.0001, β1=0.9, β2=0.999
-    'epochs'              : 200,
-    'learning_rate'       : 1e-4,
-    'adam_beta1'          : 0.9,
-    'adam_beta2'          : 0.999,
-    'loss_coef'           : 0.05,     # CD loss coefficient (HyperPocket default)
-    'kl_weight'           : 1.0,      # Weight for KL divergence term
-
-    # Appendix C: StepLR scheduler (step=41, γ=0.01)
-    'scheduler_step_size' : 41,
-    'scheduler_gamma'     : 0.01,
-
-    # Appendix C: "target network input normalization so that after 100 epochs,
-    #              the target network input is sampled from a uniform unit 3D ball"
-    'progressive_norm_epochs' : 100,
-
-    # Early Stopping — do NOT trigger before epoch 100 (paper ran at least 100)
-    'early_stopping_patience'   : 30,    # Stop if val loss doesn't improve for 30 epochs
-    'early_stopping_min_epoch'  : 100,   # Never stop before epoch 100
-
-    # Checkpointing
-    'save_freq'           : 10,      # Save checkpoint every N epochs
-    'min_save_epoch'      : 10,      # Start saving from this epoch
-
-    # WandB
-    'wandb_project'       : 'HyperPocket-SensatUrban',
-    'wandb_run_name'      : None,    # Auto-generated if None
-    'use_wandb'           : True,    # Set False to disable WandB
-
-    # Paths
-    'save_dir'            : '/kaggle/working/checkpoints',
-    'log_dir'             : '/kaggle/working/logs',
-    'plot_dir'            : '/kaggle/working/plots',
-}
+# Default configuration (loads 'base_hyperpocket.default')
+CONFIG = get_config('base_hyperpocket.default')
 
 
 # ==========================================
@@ -560,11 +509,25 @@ def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log):
         # reconstruction: [B, 3, N] — permute to [B, N, 3] for Chamfer Loss
         recon_for_loss = reconstruction.permute(0, 2, 1)  # [B, N, 3]
 
-        # 1. Chamfer Reconstruction Loss (loss_coef * CD matches HyperPocket default)
+        # 1. Chamfer Reconstruction Loss (loss_coef * CD)
         loss_cd  = cfg['loss_coef'] * torch.mean(cd_loss_fn(gt, recon_for_loss))
 
+        # Compute effective KL weight (support optional beta-annealing schedule)
+        if cfg.get('kl_anneal', False):
+            warmup_epoch = cfg.get('kl_anneal_warmup', 15)
+            end_epoch    = cfg.get('kl_anneal_end', 40)
+            target_beta  = cfg.get('kl_weight', 0.001)
+            if epoch <= warmup_epoch:
+                current_beta = 0.0
+            elif epoch <= end_epoch:
+                current_beta = target_beta * (epoch - warmup_epoch) / max(1, end_epoch - warmup_epoch)
+            else:
+                current_beta = target_beta
+        else:
+            current_beta = cfg.get('kl_weight', 1.0)
+
         # 2. KL Divergence: 0.5 * sum(exp(logvar) + mu^2 - 1 - logvar) / B
-        loss_kl  = cfg['kl_weight'] * 0.5 * (
+        loss_kl  = current_beta * 0.5 * (
             torch.exp(logvar) + torch.square(mu) - 1 - logvar
         ).sum() / existing.size(0)
 
@@ -794,17 +757,16 @@ def train(cfg=CONFIG):
             }
             wandb.log(wandb_log, step=epoch)
 
-        # --- Save Periodic Checkpoint ---
-        if epoch >= cfg['min_save_epoch'] and epoch % cfg['save_freq'] == 0:
-            ckpt_path = os.path.join(cfg['save_dir'], f'model_epoch_{epoch:04d}.pth')
-            torch.save({
-                'epoch'      : epoch,
-                'model_state': model.state_dict(),
-                'optim_state': optimizer.state_dict(),
-                'sched_state': scheduler.state_dict(),
-                'val_loss'   : val_cd,
-            }, ckpt_path)
-            log.info(f'  Checkpoint saved: {ckpt_path}')
+        # --- Save Latest Checkpoint (Overwritten each epoch for crash recovery, saving disk space) ---
+        latest_ckpt_path = os.path.join(cfg['save_dir'], 'latest_model.pth')
+        torch.save({
+            'epoch'      : epoch,
+            'model_state': model.state_dict(),
+            'optim_state': optimizer.state_dict(),
+            'sched_state': scheduler.state_dict(),
+            'val_loss'   : val_cd,
+            'config'     : cfg,
+        }, latest_ckpt_path)
 
         # --- Save Visualizations ---
         if epoch % cfg['save_freq'] == 0 or epoch == 1:
@@ -859,4 +821,17 @@ def train(cfg=CONFIG):
 # ENTRY POINT
 # ==========================================
 if __name__ == '__main__':
-    train(CONFIG)
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Train Point Cloud Completion Models on SensatUrban')
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='base_hyperpocket.default',
+        help=f'Configuration key to run. Available: {list_available_configs()}'
+    )
+    args, unknown = parser.parse_known_args()
+
+    selected_cfg = get_config(args.config)
+    print(f"\n[CONFIG] Loaded: '{args.config}' (WandB run: {selected_cfg.get('wandb_run_name')})\n")
+    train(selected_cfg)

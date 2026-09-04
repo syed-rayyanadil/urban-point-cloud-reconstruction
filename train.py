@@ -442,7 +442,7 @@ def plot_loss_curves(train_losses, val_losses, save_dir, epoch):
     fig.suptitle(f'HyperPocket VAE — Training Progress (Epoch {epoch})',
                  color='white', fontsize=14, fontweight='bold')
     plt.tight_layout()
-    path = os.path.join(save_dir, f'loss_curves_epoch_{epoch:04d}.png')
+    path = os.path.join(save_dir, 'loss_curves.png')
     plt.savefig(path, dpi=120, bbox_inches='tight', facecolor='#1a1a2e')
     plt.close(fig)
     return path
@@ -482,7 +482,7 @@ def plot_reconstruction_sample(existing_np, gt_np, recon_np, save_dir, epoch, sa
     fig.suptitle(f'Reconstruction Sample — Epoch {epoch} | Sample {sample_idx}',
                  color='white', fontsize=13, fontweight='bold', y=1.01)
     plt.tight_layout()
-    path = os.path.join(save_dir, f'reconstruction_epoch_{epoch:04d}_sample_{sample_idx}.png')
+    path = os.path.join(save_dir, 'reconstruction_sample.png')
     plt.savefig(path, dpi=120, bbox_inches='tight', facecolor='#1a1a2e')
     plt.close(fig)
     return path

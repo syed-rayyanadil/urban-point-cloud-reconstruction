@@ -3,11 +3,12 @@ configs/__init__.py — Central Configuration Registry
 
 Allows loading any configuration by name across all model architectures:
 e.g. get_config('base_hyperpocket.default')
-     get_config('base_hyperpocket.exp1_reduced_beta')
-     get_config('base_hyperpocket.exp2_annealing')
+     get_config('base_hyperpocket.exp1_baseline_default')
+     get_config('base_hyperpocket.exp2_reduced_beta')
+     get_config('base_hyperpocket.exp3_annealing')
 """
 
-from .base_config import GLOBAL_BASE_CONFIG
+from .base_config import GLOBAL_BASE_CONFIG, get_experiment_dirs
 from .base_hyperpocket_architecture import EXPERIMENTS as HYPERPOCKET_EXPERIMENTS
 
 CONFIG_REGISTRY = {
@@ -19,6 +20,7 @@ def get_config(config_key: str = 'base_hyperpocket.default') -> dict:
     """Retrieve a configuration dictionary by dot-separated key (e.g. 'model.experiment').
 
     If only model name or experiment name is given, defaults intelligently.
+    Automatically assigns output paths under experiments/<model_name>/<exp_name>/.
     """
     parts = config_key.split('.')
     if len(parts) == 2:
@@ -44,7 +46,19 @@ def get_config(config_key: str = 'base_hyperpocket.default') -> dict:
             f'Available: {list(CONFIG_REGISTRY[model_name].keys())}'
         )
 
-    return CONFIG_REGISTRY[model_name][exp_name].copy()
+    cfg = CONFIG_REGISTRY[model_name][exp_name].copy()
+
+    # Automatically set structured experiment directories: experiments/<model_name>/<exp_name>/
+    exp_dirs = get_experiment_dirs(
+        model_name = model_name,
+        exp_name   = exp_name,
+        base_dir   = cfg.get('experiments_base_dir', '/kaggle/working/experiments')
+    )
+    cfg.update(exp_dirs)
+    cfg['model_name'] = model_name
+    cfg['exp_name']   = exp_name
+
+    return cfg
 
 
 def list_available_configs() -> list:

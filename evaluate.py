@@ -1,13 +1,19 @@
 """
 evaluate.py — Quantitative Evaluation for HyperPocket VAE Point Cloud Completion.
 
-Loads a trained model checkpoint, generates k=10 diverse completion variants
-per test shape using random latent noise (σ = 0.05, matching Appendix C),
-and computes the 5 evaluation metrics: CD, EMD, MMD, TMD, and JSD.
+Loads a trained model checkpoint from the specified experiment directory,
+generates k=10 diverse completion variants per test shape using random latent noise
+(σ = 0.05, matching Wu et al., 2020 Appendix C), and computes the 5 evaluation metrics:
+CD, EMD, MMD, TMD, and JSD.
 
-Usage (Kaggle Notebook Cell):
+Usage:
+    # CLI mode (matches train.py):
+    python evaluate.py --config base_hyperpocket.exp1_baseline_default
+    python evaluate.py --config base_hyperpocket.exp2_reduced_beta
+    python evaluate.py --config base_hyperpocket.exp3_annealing
+
+    # In Kaggle Notebook:
     exec(open('evaluate.py').read())
-    # OR: %run evaluate.py
 """
 
 import os
@@ -24,29 +30,19 @@ REPO_PATH = '/kaggle/working/urban-point-cloud-reconstruction'
 if os.path.exists(REPO_PATH) and REPO_PATH not in sys.path:
     sys.path.insert(0, REPO_PATH)
 
-from sensat_dataset import get_dataloader, SensatUrbanDataset
-from sensat_metrics import PointCloudEvaluator, _ChamferLoss, _sinkhorn_emd
-from train import HyperPocketModel, CONFIG
+from datasets.sensat_dataset import get_dataloader, SensatUrbanDataset
+from utils.sensat_metrics import PointCloudEvaluator, _ChamferLoss, _sinkhorn_emd
+from models.base_hyperpocket import HyperPocketModel
+from configs import get_config, list_available_configs
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # ==========================================
-# EVALUATION CONFIGURATION
+# DEFAULT EVALUATION CONFIGURATION
 # ==========================================
-EVAL_CONFIG = {
-    'model_path'   : '/kaggle/working/checkpoints/best_model.pth',
-    'data_root'    : '/kaggle/input/datasets/syedrayyanadil/sensaturban-out/SensatUrban_Out',
-    'n_points'     : 1024,
-    'batch_size'   : 8,          # Batch size for generative inference
-    'num_workers'  : 2,
-    'k_variants'   : 10,         # k=10 diverse completions per shape (Wu et al. 2020)
-    'noise_sigma'  : 0.05,       # Latent noise scale (Appendix C)
-    'save_path'    : '/kaggle/working/evaluation_results.json',
-    'save_samples' : 5,          # Save top 5 diverse visual samples (.png and .ply)
-    'log_to_wandb' : True,       # Log test metrics to wandb summary if active
-}
+DEFAULT_CONFIG = get_config('base_hyperpocket.default')
 
 
 def _save_ply(filepath, points):
@@ -106,7 +102,30 @@ def _plot_variants_figure(pe_np, pm_np, variants_np, save_png_path, sample_idx):
     plt.close(fig)
 
 
-def run_evaluation(cfg=EVAL_CONFIG):
+def run_evaluation(config_input=None):
+    """Run quantitative evaluation on the test dataset.
+
+    Args:
+        config_input (str | dict | None): Config key string (e.g. 'base_hyperpocket.default'),
+                                          a loaded config dict, or None (uses default).
+    """
+    if isinstance(config_input, str):
+        cfg = get_config(config_input)
+    elif isinstance(config_input, dict):
+        cfg = config_input.copy()
+    else:
+        cfg = DEFAULT_CONFIG.copy()
+
+    # Automatically resolve checkpoint path from experiment directory if not explicitly given
+    if not cfg.get('model_path'):
+        cfg['model_path'] = os.path.join(cfg['save_dir'], 'best_model.pth')
+
+    # Automatically resolve save path for evaluation_results.json
+    if not cfg.get('save_path'):
+        cfg['save_path'] = cfg.get('eval_save_path') or os.path.join(
+            cfg.get('exp_dir', cfg['save_dir']), 'evaluation_results.json'
+        )
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('=' * 70)
     print('  HyperPocket VAE — Quantitative Evaluation Pipeline')
@@ -116,16 +135,20 @@ def run_evaluation(cfg=EVAL_CONFIG):
     print(f'  Data Root     : {cfg["data_root"]}')
     print(f'  k Variants    : {cfg.get("k_variants", 10)}')
     print(f'  Noise Sigma   : {cfg.get("noise_sigma", 0.05)} (per Appendix C)')
+    print(f'  Save Results  : {cfg["save_path"]}')
     print('=' * 70)
 
     # ---- 1. Load Model ----
     if not os.path.exists(cfg['model_path']):
-        raise FileNotFoundError(f"Trained model checkpoint not found at: {cfg['model_path']}")
+        raise FileNotFoundError(
+            f"Trained model checkpoint not found at: {cfg['model_path']}\n"
+            f"Please ensure training has completed for this experiment or pass --checkpoint /path/to/model.pth"
+        )
 
     print("Loading model checkpoint...")
     checkpoint = torch.load(cfg['model_path'], map_location=device)
 
-    train_cfg = checkpoint.get('config', CONFIG)
+    train_cfg = checkpoint.get('config', cfg)
     model = HyperPocketModel(train_cfg).to(device)
     model.load_state_dict(checkpoint['model_state'])
     model.eval()
@@ -161,10 +184,10 @@ def run_evaluation(cfg=EVAL_CONFIG):
 
     start_time = time.time()
     sample_global_idx = 0
-    save_dir = os.path.dirname(cfg.get('save_path', '/kaggle/working/evaluation_results.json'))
+    eval_dir = os.path.dirname(cfg['save_path'])
 
     with torch.no_grad():
-        for batch_idx, (existing, missing, gt, _) in enumerate(tqdm(test_loader)):
+        for batch_idx, (existing, missing, gt, _) in enumerate(tqdm(test_loader, desc="Evaluating")):
             B = existing.size(0)
             existing = existing.to(device)
             missing  = missing.to(device)
@@ -210,11 +233,11 @@ def run_evaluation(cfg=EVAL_CONFIG):
                     var_np = g_variants.cpu().numpy()
 
                     # Save PNG Visual
-                    png_path = os.path.join(save_dir, 'visual_samples', f'sample_{sample_global_idx:02d}_variants.png')
+                    png_path = os.path.join(eval_dir, 'eval_samples', f'sample_{sample_global_idx:02d}_variants.png')
                     _plot_variants_figure(pe_np, pm_np, var_np, png_path, sample_global_idx)
 
                     # Save PLY Files for 3D inspection
-                    ply_dir = os.path.join(save_dir, 'visual_samples', f'sample_{sample_global_idx:02d}_ply')
+                    ply_dir = os.path.join(eval_dir, 'eval_samples', f'sample_{sample_global_idx:02d}_ply')
                     _save_ply(os.path.join(ply_dir, 'pe_visible.ply'), pe_np)
                     _save_ply(os.path.join(ply_dir, 'pm_ground_truth.ply'), pm_np)
                     for vi in range(min(4, k_variants)):
@@ -270,11 +293,10 @@ def run_evaluation(cfg=EVAL_CONFIG):
     print('=' * 70)
 
     # Save to JSON
-    save_path = cfg.get('save_path', '/kaggle/working/evaluation_results.json')
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    with open(save_path, 'w') as f:
+    os.makedirs(os.path.dirname(cfg['save_path']), exist_ok=True)
+    with open(cfg['save_path'], 'w') as f:
         json.dump(results, f, indent=4)
-    print(f"Results saved to: {save_path}")
+    print(f"Results saved to: {cfg['save_path']}")
 
     # Optional WandB Summary logging
     try:
@@ -291,4 +313,50 @@ def run_evaluation(cfg=EVAL_CONFIG):
 
 
 if __name__ == '__main__':
-    run_evaluation()
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Evaluate Point Cloud Completion Models on SensatUrban')
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='base_hyperpocket.default',
+        help=f'Configuration key to evaluate. Available: {list_available_configs()}'
+    )
+    parser.add_argument(
+        '--checkpoint',
+        type=str,
+        default=None,
+        help='Optional explicit path to checkpoint .pth file (defaults to best_model.pth in experiment checkpoints folder)'
+    )
+    parser.add_argument(
+        '--k_variants',
+        type=int,
+        default=10,
+        help='Number of diverse completions per test block (default: 10)'
+    )
+    parser.add_argument(
+        '--noise_sigma',
+        type=float,
+        default=0.05,
+        help='Latent noise scale sigma (default: 0.05, matching Appendix C)'
+    )
+    parser.add_argument(
+        '--batch_size',
+        type=int,
+        default=8,
+        help='Batch size for evaluation inference (default: 8)'
+    )
+    args, unknown = parser.parse_known_args()
+
+    selected_cfg = get_config(args.config)
+    if args.checkpoint:
+        selected_cfg['model_path'] = args.checkpoint
+    selected_cfg['k_variants'] = args.k_variants
+    selected_cfg['noise_sigma'] = args.noise_sigma
+    selected_cfg['batch_size'] = args.batch_size
+
+    print(f"\n[EVAL CONFIG] Loaded: '{args.config}'")
+    print(f"  Target Checkpoint : {selected_cfg.get('model_path', os.path.join(selected_cfg['save_dir'], 'best_model.pth'))}")
+    print(f"  Results JSON      : {selected_cfg.get('save_path', selected_cfg.get('eval_save_path'))}\n")
+
+    run_evaluation(selected_cfg)

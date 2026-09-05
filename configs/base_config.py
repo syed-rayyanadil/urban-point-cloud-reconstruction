@@ -5,6 +5,8 @@ Contains project-wide default parameters shared across all point cloud
 completion models (dataset paths, optimizer, progressive norm, WandB).
 """
 
+import os
+
 GLOBAL_BASE_CONFIG = {
     # Dataset & DataLoader
     'data_root'                 : '/kaggle/input/sensaturban-out/SensatUrban_Out',
@@ -36,8 +38,18 @@ GLOBAL_BASE_CONFIG = {
     'wandb_run_name'            : None,
     'use_wandb'                 : True,
 
-    # Output Paths
-    'save_dir'                  : '/kaggle/working/checkpoints',
-    'log_dir'                   : '/kaggle/working/logs',
-    'plot_dir'                  : '/kaggle/working/plots',
+    # Base experiment directories: experiments/<model_name>/<exp_name>/
+    'experiments_base_dir'      : '/kaggle/working/experiments',
 }
+
+
+def get_experiment_dirs(model_name: str, exp_name: str, base_dir: str = '/kaggle/working/experiments') -> dict:
+    """Return structured paths for an experiment: experiments/<model_name>/<exp_name>/"""
+    exp_dir = os.path.join(base_dir, model_name, exp_name)
+    return {
+        'exp_dir'        : exp_dir,
+        'save_dir'       : os.path.join(exp_dir, 'checkpoints'),
+        'log_dir'        : os.path.join(exp_dir, 'logs'),
+        'plot_dir'       : os.path.join(exp_dir, 'plots'),
+        'eval_save_path' : os.path.join(exp_dir, 'evaluation_results.json'),
+    }

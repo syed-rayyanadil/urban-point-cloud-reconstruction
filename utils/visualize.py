@@ -53,7 +53,7 @@ if ROOT_DIR not in sys.path:
 
 from datasets.sensat_dataset import hyperplane_cut, resample_pcd
 
-from preprocess import (
+from datasets.preprocess import (
     read_ply_minimal,
     grid_subsample,
     spatial_block_partition,

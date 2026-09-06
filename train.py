@@ -86,9 +86,11 @@ def setup_logging(log_dir):
         handlers = [
             logging.FileHandler(log_path),
             logging.StreamHandler(sys.stdout),
-        ]
+        ],
+        force    = True,
     )
     return logging.getLogger(), log_path
+
 
 # ==========================================
 # EARLY STOPPING

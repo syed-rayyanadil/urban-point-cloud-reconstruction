@@ -297,37 +297,3 @@ def get_dataloader(split='train', data_root=PREPROCESSED_DATA_DIR,
 
     return loader
 
-
-# ==========================================
-# QUICK STANDALONE TEST
-# ==========================================
-if __name__ == "__main__":
-    print("\n--- SensatUrban Dataset Quick Sanity Test ---\n")
-
-    # --- Test 1: Default dict format [B, N, 3] ---
-    print("[Test 1] Dict format, [B, N, 3]:")
-    train_loader = get_dataloader(split='train')
-    batch = next(iter(train_loader))
-    print(f"  Pe     : {batch['Pe'].shape}    # Expected [5, 1024, 3]")
-    print(f"  Pm     : {batch['Pm'].shape}    # Expected [5, 1024, 3]")
-    print(f"  Target : {batch['Target'].shape}")
-    print(f"  Pe range: [{batch['Pe'].min():.3f}, {batch['Pe'].max():.3f}]  (should be in [-1, 1])")
-    print(f"  Dtype  : {batch['Pe'].dtype}")
-
-    # --- Test 2: HyperPocket tuple format (existing, missing, gt, _) ---
-    print("\n[Test 2] HyperPocket tuple format (existing, missing, gt, _):")
-    loader_tuple = get_dataloader(split='train', as_tuple=True)
-    existing, missing, gt, _ = next(iter(loader_tuple))
-    print(f"  existing : {existing.shape}    # Expected [5, 1024, 3]")
-    print(f"  missing  : {missing.shape}")
-    print(f"  gt       : {gt.shape}")
-    print(f"  _        : {_}               # None placeholder")
-
-    # --- Test 3: Channel-first [B, 3, N] for 1D convolutions ---
-    print("\n[Test 3] Transposed [B, 3, N] for 1D conv layers:")
-    loader_t = get_dataloader(split='train', transpose=True, as_tuple=True)
-    existing_t, missing_t, gt_t, _ = next(iter(loader_t))
-    print(f"  existing : {existing_t.shape}    # Expected [5, 3, 1024]")
-    print(f"  missing  : {missing_t.shape}")
-
-    print("\n--- All tests complete ---")

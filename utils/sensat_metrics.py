@@ -494,25 +494,3 @@ class PointCloudEvaluator:
 
         return results
 
-
-# ==========================================
-# QUICK STANDALONE TEST
-# ==========================================
-if __name__ == "__main__":
-    print("\n--- PointCloudEvaluator Sanity Test (using random tensors) ---\n")
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Running on: {device}\n")
-
-    # Simulate k=10 generated completions and M=50 reference shapes
-    # Shape [B, N, 3] with coordinates in [-1, 1] (unit sphere — like SensatUrban output)
-    torch.manual_seed(42)
-    generated = torch.rand(10, 1024, 3) * 2 - 1   # [10, 1024, 3], range [-1, 1]
-    reference = torch.rand(50, 1024, 3) * 2 - 1   # [50, 1024, 3], range [-1, 1]
-
-    evaluator = PointCloudEvaluator(device=device, k=10, verbose=True)
-    results   = evaluator.evaluate(generated, reference)
-
-    print("Raw results dictionary:")
-    print(results)
-    print("\n--- Sanity test complete ---")

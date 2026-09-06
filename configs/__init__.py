@@ -10,9 +10,11 @@ e.g. get_config('base_hyperpocket.default')
 
 from .base_config import GLOBAL_BASE_CONFIG, get_experiment_dirs
 from .base_hyperpocket_architecture import EXPERIMENTS as HYPERPOCKET_EXPERIMENTS
+from .context_hyperpocket_architecture import EXPERIMENTS as CONTEXT_HYPERPOCKET_EXPERIMENTS
 
 CONFIG_REGISTRY = {
-    'base_hyperpocket': HYPERPOCKET_EXPERIMENTS,
+    'base_hyperpocket'   : HYPERPOCKET_EXPERIMENTS,
+    'context_hyperpocket': CONTEXT_HYPERPOCKET_EXPERIMENTS,
 }
 
 
@@ -32,10 +34,14 @@ def get_config(config_key: str = 'base_hyperpocket.default') -> dict:
         elif parts[0] in HYPERPOCKET_EXPERIMENTS:
             model_name = 'base_hyperpocket'
             exp_name = parts[0]
+        elif parts[0] in CONTEXT_HYPERPOCKET_EXPERIMENTS:
+            model_name = 'context_hyperpocket'
+            exp_name = parts[0]
         else:
             raise KeyError(f'Unknown config key: {config_key}. Available: {list_available_configs()}')
     else:
         raise ValueError(f'Invalid config key format: {config_key}. Use "model_name.exp_name"')
+
 
     if model_name not in CONFIG_REGISTRY:
         raise KeyError(f'Model "{model_name}" not in registry. Available models: {list(CONFIG_REGISTRY.keys())}')

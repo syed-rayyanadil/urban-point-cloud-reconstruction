@@ -52,9 +52,12 @@ if os.path.exists(REPO_PATH) and REPO_PATH not in sys.path:
     sys.path.insert(0, REPO_PATH)
 
 from datasets.sensat_dataset import get_dataloader, SensatUrbanDataset
+from datasets.context_sensat_dataset import get_context_dataloader, ContextSensatUrbanDataset
 from utils.sensat_metrics import _ChamferLoss
 from models.base_hyperpocket import HyperPocketModel
+from models.context_hyperpocket import ContextHyperPocketModel
 from configs import get_config, list_available_configs
+
 
 # ==========================================
 # Weights & Biases (WandB) Setup
@@ -207,21 +210,35 @@ def plot_reconstruction_sample(existing_np, gt_np, recon_np, save_dir, epoch, sa
 # ==========================================
 # TRAINING EPOCH LOOP
 # ==========================================
-def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log):
+def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log, is_context_model=False):
     model.train()
     total_loss = total_cd = total_kl = 0.0
     n_batches  = len(loader)
 
     latest_existing = latest_gt = latest_recon = None
 
-    for batch_idx, (existing, missing, gt, _) in enumerate(loader, 1):
-        existing = existing.to(device)   # [B, N, 3]
-        missing  = missing.to(device)    # [B, N, 3]
-        gt       = gt.to(device)         # [B, N, 3]
+    for batch_idx, batch in enumerate(loader, 1):
+        if is_context_model:
+            existing, missing, gt, pc = batch
+            existing = existing.to(device)   # [B, N, 3]
+            missing  = missing.to(device)    # [B, N, 3]
+            gt       = gt.to(device)         # [B, N, 3]
+            if pc is not None:
+                pc = pc.to(device)
+        else:
+            existing, missing, gt, _ = batch
+            existing = existing.to(device)   # [B, N, 3]
+            missing  = missing.to(device)    # [B, N, 3]
+            gt       = gt.to(device)         # [B, N, 3]
+            pc       = None
 
         optimizer.zero_grad()
 
-        reconstruction, mu, logvar = model(existing, missing, epoch, device)
+        if is_context_model:
+            reconstruction, mu, logvar = model(existing, missing, pc=pc, epoch=epoch, device=device)
+        else:
+            reconstruction, mu, logvar = model(existing, missing, epoch, device)
+
         # reconstruction: [B, 3, N] — permute to [B, N, 3] for Chamfer Loss
         recon_for_loss = reconstruction.permute(0, 2, 1)  # [B, N, 3]
 
@@ -275,17 +292,27 @@ def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log):
 # ==========================================
 # VALIDATION EPOCH LOOP
 # ==========================================
-def val_epoch(model, loader, device, cd_loss_fn, cfg):
+def val_epoch(model, loader, device, cd_loss_fn, cfg, is_context_model=False):
     model.eval()
     total_cd = 0.0
 
     with torch.no_grad():
-        for batch_idx, (existing, missing, gt, _) in enumerate(loader, 1):
-            existing = existing.to(device)
-            missing  = missing.to(device)
-            gt       = gt.to(device)
+        for batch_idx, batch in enumerate(loader, 1):
+            if is_context_model:
+                existing, missing, gt, pc = batch
+                existing = existing.to(device)
+                missing  = missing.to(device)
+                gt       = gt.to(device)
+                if pc is not None:
+                    pc = pc.to(device)
+                reconstruction = model(existing, missing, pc=pc, epoch=0, device=device)
+            else:
+                existing, missing, gt, _ = batch
+                existing = existing.to(device)
+                missing  = missing.to(device)
+                gt       = gt.to(device)
+                reconstruction = model(existing, missing, 0, device)
 
-            reconstruction = model(existing, missing, 0, device)
             recon_for_loss = reconstruction.permute(0, 2, 1)
 
             loss_cd = cfg['loss_coef'] * torch.mean(cd_loss_fn(gt, recon_for_loss))
@@ -306,6 +333,11 @@ def train(cfg=CONFIG):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'
 
+    is_context_model = (
+        cfg.get('model_name') == 'context_hyperpocket'
+        or cfg.get('use_context', False)
+    )
+
     # ---- WandB Init ----
     use_wandb = cfg.get('use_wandb', True) and WANDB_AVAILABLE
     if use_wandb:
@@ -320,7 +352,7 @@ def train(cfg=CONFIG):
         log.info(f'  WandB         : ✗ Disabled')
 
     log.info('=' * 70)
-    log.info('  HyperPocket VAE — SensatUrban Urban Point Cloud Completion')
+    log.info(f'  Model Architecture: {"ContextHyperPocket (Context-Aware)" if is_context_model else "HyperPocket (Baseline)"}')
     log.info('  Configuration aligned with Wu et al. (2020) Appendix C')
     log.info('=' * 70)
     log.info(f'  Device         : {device} ({gpu_name})')
@@ -330,8 +362,14 @@ def train(cfg=CONFIG):
     log.info(f'  Learning Rate  : {cfg["learning_rate"]} (β1={cfg["adam_beta1"]}, β2={cfg["adam_beta2"]})')
     log.info(f'  Loss Coef (CD) : {cfg["loss_coef"]}')
     log.info(f'  KL Weight      : {cfg["kl_weight"]}')
-    log.info(f'  Latent Dim     : |zm|={cfg["random_encoder_output_size"]} + '
-             f'|ze|={cfg["real_encoder_output_size"]} = {cfg["latent_dim"]}')
+    if is_context_model:
+        log.info(f'  Latent Dim     : |zm|={cfg.get("random_encoder_output_size", 128)} + '
+                 f'|ze|={cfg.get("real_encoder_output_size", 128)} + '
+                 f'|zc|={cfg.get("context_encoder_output_size", 128)} = {cfg["latent_dim"]}')
+        log.info(f'  Context Map    : {cfg.get("neighbor_map_path", "datasets/neighbor_map.json")}')
+    else:
+        log.info(f'  Latent Dim     : |zm|={cfg["random_encoder_output_size"]} + '
+                 f'|ze|={cfg["real_encoder_output_size"]} = {cfg["latent_dim"]}')
     log.info(f'  TargetNet Arch : 3 → {cfg["target_network_layers"]} → 3  (per Appendix C)')
     log.info(f'  Scheduler      : StepLR(step={cfg["scheduler_step_size"]}, γ={cfg["scheduler_gamma"]})')
     log.info(f'  Prog. Norm     : {cfg["progressive_norm_epochs"]} epochs')
@@ -348,41 +386,79 @@ def train(cfg=CONFIG):
         json.dump(cfg, f, indent=2)
 
     # ---- Dataset & DataLoaders ----
-    train_loader = get_dataloader(
-        split       = 'train',
-        data_root   = cfg['data_root'],
-        batch_size  = cfg['batch_size'],
-        num_workers = cfg['num_workers'],
-        as_tuple    = True,
-    )
+    if is_context_model:
+        neighbor_map_path = cfg.get('neighbor_map_path', 'datasets/neighbor_map.json')
+        tile_centroids_path = cfg.get('tile_centroids_path', 'datasets/tile_centroids.json')
 
-    # Val loader (test split)
-    test_dataset = SensatUrbanDataset(
-        split     = 'test',
-        data_root = cfg['data_root'],
-        n_points  = cfg['n_points'],
-    )
-    val_loader = DataLoader(
-        test_dataset,
-        batch_size  = cfg['batch_size'],
-        shuffle     = False,
-        num_workers = cfg['num_workers'],
-        pin_memory  = True,
-        drop_last   = False,
-        collate_fn  = lambda batch: (
-            torch.stack([b['Pe']     for b in batch]),
-            torch.stack([b['Pm']     for b in batch]),
-            torch.stack([b['Target'] for b in batch]),
-            None
+        train_loader = get_context_dataloader(
+            split              = 'train',
+            data_root          = cfg['data_root'],
+            batch_size         = cfg['batch_size'],
+            num_workers        = cfg['num_workers'],
+            as_tuple           = True,
+            neighbor_map_path  = neighbor_map_path,
+            tile_centroids_path= tile_centroids_path,
         )
-    )
+
+        val_dataset = ContextSensatUrbanDataset(
+            split              = 'test',
+            data_root          = cfg['data_root'],
+            n_points           = cfg['n_points'],
+            neighbor_map_path  = neighbor_map_path,
+            tile_centroids_path= tile_centroids_path,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size  = cfg['batch_size'],
+            shuffle     = False,
+            num_workers = cfg['num_workers'],
+            pin_memory  = True,
+            drop_last   = False,
+            collate_fn  = lambda batch: (
+                torch.stack([b['Pe']     for b in batch]),
+                torch.stack([b['Pm']     for b in batch]),
+                torch.stack([b['Target'] for b in batch]),
+                torch.stack([b['Pc']     for b in batch]),
+            )
+        )
+    else:
+        train_loader = get_dataloader(
+            split       = 'train',
+            data_root   = cfg['data_root'],
+            batch_size  = cfg['batch_size'],
+            num_workers = cfg['num_workers'],
+            as_tuple    = True,
+        )
+
+        test_dataset = SensatUrbanDataset(
+            split     = 'test',
+            data_root = cfg['data_root'],
+            n_points  = cfg['n_points'],
+        )
+        val_loader = DataLoader(
+            test_dataset,
+            batch_size  = cfg['batch_size'],
+            shuffle     = False,
+            num_workers = cfg['num_workers'],
+            pin_memory  = True,
+            drop_last   = False,
+            collate_fn  = lambda batch: (
+                torch.stack([b['Pe']     for b in batch]),
+                torch.stack([b['Pm']     for b in batch]),
+                torch.stack([b['Target'] for b in batch]),
+                None
+            )
+        )
 
     log.info(f'  Train batches  : {len(train_loader)}')
     log.info(f'  Val batches    : {len(val_loader)}')
 
     # ---- Model ----
     model_cfg = {**cfg, 'n_points': cfg['n_points']}
-    model     = HyperPocketModel(model_cfg).to(device)
+    if is_context_model:
+        model = ContextHyperPocketModel(model_cfg).to(device)
+    else:
+        model = HyperPocketModel(model_cfg).to(device)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f'  Model Params   : {total_params:,}')
 
@@ -424,7 +500,8 @@ def train(cfg=CONFIG):
 
         # --- Train ---
         avg_loss, avg_cd, avg_kl, ex_np, gt_np, rec_np = train_epoch(
-            epoch, model, optimizer, train_loader, device, cd_loss_fn, cfg, log
+            epoch, model, optimizer, train_loader, device, cd_loss_fn, cfg, log,
+            is_context_model = is_context_model
         )
         train_losses.append([avg_loss, avg_cd, avg_kl])
         scheduler.step()
@@ -440,7 +517,10 @@ def train(cfg=CONFIG):
         )
 
         # --- Validation ---
-        val_cd = val_epoch(model, val_loader, device, cd_loss_fn, cfg)
+        val_cd = val_epoch(
+            model, val_loader, device, cd_loss_fn, cfg,
+            is_context_model = is_context_model
+        )
         val_losses.append(val_cd)
         is_best = val_cd < best_val_loss
 
@@ -454,6 +534,7 @@ def train(cfg=CONFIG):
                 'val_loss'   : val_cd,
                 'config'     : cfg,
             }, os.path.join(cfg['save_dir'], 'best_model.pth'))
+
 
         log.info(
             f'Epoch [{epoch:03d}/{cfg["epochs"]}] '

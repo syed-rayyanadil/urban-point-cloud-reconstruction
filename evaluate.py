@@ -31,9 +31,12 @@ if os.path.exists(REPO_PATH) and REPO_PATH not in sys.path:
     sys.path.insert(0, REPO_PATH)
 
 from datasets.sensat_dataset import get_dataloader, SensatUrbanDataset
+from datasets.context_sensat_dataset import get_context_dataloader, ContextSensatUrbanDataset
 from utils.sensat_metrics import PointCloudEvaluator, _ChamferLoss, _sinkhorn_emd
 from models.base_hyperpocket import HyperPocketModel
+from models.context_hyperpocket import ContextHyperPocketModel
 from configs import get_config, list_available_configs
+
 
 import matplotlib
 matplotlib.use('Agg')
@@ -116,15 +119,29 @@ def run_evaluation(config_input=None):
     else:
         cfg = DEFAULT_CONFIG.copy()
 
+    context_mode = str(cfg.get('context_mode', 'true')).lower()
+    if context_mode not in ['true', 'zeros', 'random']:
+        raise ValueError(f"Unknown context_mode '{context_mode}'. Expected 'true', 'zeros', or 'random'.")
+
     # Automatically resolve checkpoint path from experiment directory if not explicitly given
     if not cfg.get('model_path'):
         cfg['model_path'] = os.path.join(cfg['save_dir'], 'best_model.pth')
 
-    # Automatically resolve save path for evaluation_results.json
+    # Automatically resolve save path for evaluation_results.json (with mode suffix for ablations)
     if not cfg.get('save_path'):
-        cfg['save_path'] = cfg.get('eval_save_path') or os.path.join(
-            cfg.get('exp_dir', cfg['save_dir']), 'evaluation_results.json'
+        base_save_path = cfg.get('eval_save_path') or os.path.join(
+            cfg.get('exp_dir', cfg.get('save_dir', '.')), 'evaluation_results.json'
         )
+    else:
+        base_save_path = cfg['save_path']
+
+    if context_mode != 'true':
+        dir_name, file_name = os.path.split(base_save_path)
+        name, ext = os.path.splitext(file_name)
+        if not name.endswith(f"_{context_mode}"):
+            base_save_path = os.path.join(dir_name, f"{name}_{context_mode}{ext}")
+
+    cfg['save_path'] = base_save_path
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('=' * 70)
@@ -133,10 +150,12 @@ def run_evaluation(config_input=None):
     print(f'  Device        : {device}')
     print(f'  Model Path    : {cfg["model_path"]}')
     print(f'  Data Root     : {cfg["data_root"]}')
+    print(f'  Context Mode  : {context_mode}')
     print(f'  k Variants    : {cfg.get("k_variants", 10)}')
     print(f'  Noise Sigma   : {cfg.get("noise_sigma", 0.05)} (per Appendix C)')
     print(f'  Save Results  : {cfg["save_path"]}')
     print('=' * 70)
+
 
     # ---- 1. Load Model ----
     if not os.path.exists(cfg['model_path']):
@@ -149,20 +168,40 @@ def run_evaluation(config_input=None):
     checkpoint = torch.load(cfg['model_path'], map_location=device)
 
     train_cfg = checkpoint.get('config', cfg)
-    model = HyperPocketModel(train_cfg).to(device)
+    is_context_model = (
+        train_cfg.get('model_name') == 'context_hyperpocket'
+        or train_cfg.get('use_context', False)
+    )
+
+    if is_context_model:
+        model = ContextHyperPocketModel(train_cfg).to(device)
+    else:
+        model = HyperPocketModel(train_cfg).to(device)
+
     model.load_state_dict(checkpoint['model_state'])
     model.eval()
-    print("Model loaded successfully!")
+    print(f"Model ({'ContextHyperPocket' if is_context_model else 'HyperPocket'}) loaded successfully!")
 
     # ---- 2. Load Dataset ----
     print("\nLoading test dataset...")
-    test_loader = get_dataloader(
-        split       = 'test',
-        data_root   = cfg['data_root'],
-        batch_size  = cfg.get('batch_size', 8),
-        num_workers = cfg.get('num_workers', 2),
-        as_tuple    = True,
-    )
+    if is_context_model:
+        test_loader = get_context_dataloader(
+            split              = 'test',
+            data_root          = cfg['data_root'],
+            batch_size         = cfg.get('batch_size', 8),
+            num_workers        = cfg.get('num_workers', 2),
+            as_tuple           = True,
+            neighbor_map_path  = cfg.get('neighbor_map_path', 'datasets/neighbor_map.json'),
+            tile_centroids_path= cfg.get('tile_centroids_path', 'datasets/tile_centroids.json'),
+        )
+    else:
+        test_loader = get_dataloader(
+            split       = 'test',
+            data_root   = cfg['data_root'],
+            batch_size  = cfg.get('batch_size', 8),
+            num_workers = cfg.get('num_workers', 2),
+            as_tuple    = True,
+        )
     print(f"Test dataset loaded with {len(test_loader.dataset)} blocks.")
 
     # ---- 3. Generative Inference Loop ----
@@ -187,7 +226,14 @@ def run_evaluation(config_input=None):
     eval_dir = os.path.dirname(cfg['save_path'])
 
     with torch.no_grad():
-        for batch_idx, (existing, missing, gt, _) in enumerate(tqdm(test_loader, desc="Evaluating")):
+        for batch_idx, batch in enumerate(tqdm(test_loader, desc="Evaluating")):
+            if is_context_model:
+                existing, missing, gt, pc = batch
+                pc = pc.to(device) if pc is not None else None
+            else:
+                existing, missing, gt, _ = batch
+                pc = None
+
             B = existing.size(0)
             existing = existing.to(device)
             missing  = missing.to(device)
@@ -198,12 +244,16 @@ def run_evaluation(config_input=None):
             batch_gens = []
             for j in range(k_variants):
                 noise = torch.randn(B, train_cfg['random_encoder_output_size'], device=device) * noise_sigma
-                recon = model(existing, pm=None, epoch=0, device=device, noise=noise)
+                if is_context_model:
+                    recon = model(existing, pm=None, pc=pc, epoch=0, device=device, noise=noise, context_mode=context_mode)
+                else:
+                    recon = model(existing, pm=None, epoch=0, device=device, noise=noise)
                 recon_xyz = recon.permute(0, 2, 1)
                 batch_gens.append(recon_xyz.cpu())
 
             batch_gens = torch.stack(batch_gens).transpose(0, 1) # [B, k, N, 3]
             all_generations.append(batch_gens)
+
 
             for idx in range(B):
                 g_variants = batch_gens[idx].to(device) # [k, N, 3]
@@ -278,6 +328,7 @@ def run_evaluation(config_input=None):
         'num_samples'       : len(recon_cd_list),
         'k_variants'        : k_variants,
         'noise_sigma'       : noise_sigma,
+        'context_mode'      : context_mode,
         'best_val_epoch'    : checkpoint.get('epoch'),
         'best_val_loss'     : checkpoint.get('val_loss'),
     }
@@ -285,6 +336,7 @@ def run_evaluation(config_input=None):
     print('\n' + '=' * 70)
     print('  EVALUATION SUMMARY RESULTS:')
     print('=' * 70)
+    print(f'  Context Mode       : {context_mode}')
     print(f'  Reconstruction CD  : {results["Reconstruction_CD"]:.6f}')
     print(f'  Reconstruction EMD : {results["Reconstruction_EMD"]:.6f}')
     print(f'  MMD (Fidelity)     : {results["MMD_CD"]:.6f}')
@@ -302,9 +354,10 @@ def run_evaluation(config_input=None):
     try:
         import wandb
         if wandb.run is not None:
+            prefix = f'test_{context_mode}' if context_mode != 'true' else 'test'
             for k, v in results.items():
                 if isinstance(v, (int, float)):
-                    wandb.summary[f'test/{k}'] = v
+                    wandb.summary[f'{prefix}/{k}'] = v
             print("Logged test metrics to WandB summary.")
     except ImportError:
         pass
@@ -329,6 +382,13 @@ if __name__ == '__main__':
         help='Optional explicit path to checkpoint .pth file (defaults to best_model.pth in experiment checkpoints folder)'
     )
     parser.add_argument(
+        '--context_mode',
+        type=str,
+        default='true',
+        choices=['true', 'zeros', 'random'],
+        help="Context conditioning mode for ContextHyperPocket: 'true', 'zeros', or 'random' (default: 'true')"
+    )
+    parser.add_argument(
         '--k_variants',
         type=int,
         default=10,
@@ -351,12 +411,15 @@ if __name__ == '__main__':
     selected_cfg = get_config(args.config)
     if args.checkpoint:
         selected_cfg['model_path'] = args.checkpoint
+    selected_cfg['context_mode'] = args.context_mode
     selected_cfg['k_variants'] = args.k_variants
     selected_cfg['noise_sigma'] = args.noise_sigma
     selected_cfg['batch_size'] = args.batch_size
 
     print(f"\n[EVAL CONFIG] Loaded: '{args.config}'")
+    print(f"  Context Mode      : {args.context_mode}")
     print(f"  Target Checkpoint : {selected_cfg.get('model_path', os.path.join(selected_cfg['save_dir'], 'best_model.pth'))}")
     print(f"  Results JSON      : {selected_cfg.get('save_path', selected_cfg.get('eval_save_path'))}\n")
 
     run_evaluation(selected_cfg)
+

@@ -113,16 +113,30 @@ class ContextHyperPocketModel(nn.Module):
             use_bias              = self.use_bias,
         )
 
-    def forward(self, pe, pm=None, pc=None, epoch=0, device=None, noise=None, use_context=None):
+    def forward(
+        self,
+        pe,
+        pm=None,
+        pc=None,
+        epoch=0,
+        device=None,
+        noise=None,
+        use_context=None,
+        context_mode="true",
+    ):
         """
         Args:
-            pe          (Tensor): Visible context [B, N, 3].
-            pm          (Tensor): Missing target [B, N, 3] (None during evaluation with noise).
-            pc          (Tensor): Spatial context neighborhood [B, N, 3] (optional).
-            epoch       (int)   : Current training epoch (for progressive norm).
-            device              : Torch device.
-            noise       (Tensor): Pre-sampled noise [B, rand_sz] to override Em.
-            use_context (bool)  : Override self.use_context (set False for zero-context ablation).
+            pe           (Tensor): Visible context [B, N, 3].
+            pm           (Tensor): Missing target [B, N, 3] (None during evaluation with noise).
+            pc           (Tensor): Spatial context neighborhood [B, N, 3] (optional).
+            epoch        (int)   : Current training epoch (for progressive norm).
+            device               : Torch device.
+            noise        (Tensor): Pre-sampled noise [B, rand_sz] to override Em.
+            use_context  (bool)  : Backward compatibility flag. If False, maps to context_mode="zeros".
+            context_mode (str)   : Context conditioning mode:
+                                   - "true"  : Compute real context embedding zc = Ec(pc).
+                                   - "zeros" : Set zc = 0 (zero-context ablation).
+                                   - "random": Set zc ~ N(0, I) (random noise context ablation).
 
         Returns (training):
             reconstruction (Tensor): [B, 3, N] reconstructed missing point cloud.
@@ -136,7 +150,12 @@ class ContextHyperPocketModel(nn.Module):
             device = pe.device
 
         B = pe.size(0)
-        enable_context = self.use_context if use_context is None else use_context
+
+        # Backward compatibility with use_context boolean flag
+        if use_context is not None:
+            context_mode = "true" if use_context else "zeros"
+        elif not self.use_context:
+            context_mode = "zeros"
 
         # 1. Em branch (Missing shape / VAE generative branch)
         if noise is None:
@@ -151,14 +170,24 @@ class ContextHyperPocketModel(nn.Module):
         ze = self.real_encoder(pe)                     # [B, real_sz]
 
         # 3. Ec branch (Spatial context neighborhood branch)
-        if enable_context and pc is not None:
-            zc = self.context_encoder(pc)              # [B, context_sz]
-        else:
-            # Zero-context vector (for Step 3.4 zero-context ablation)
+        mode = context_mode.lower() if isinstance(context_mode, str) else "true"
+        if mode == "true":
+            if pc is not None:
+                zc = self.context_encoder(pc)          # [B, context_sz]
+            else:
+                zc = torch.zeros(B, self.context_sz, device=device, dtype=ze.dtype)
+        elif mode == "zeros":
             zc = torch.zeros(B, self.context_sz, device=device, dtype=ze.dtype)
+        elif mode == "random":
+            zc = torch.randn(B, self.context_sz, device=device, dtype=ze.dtype)
+        else:
+            raise ValueError(
+                f"Unknown context_mode '{context_mode}'. Expected 'true', 'zeros', or 'random'."
+            )
 
         # 4. Concatenate: [zm (128), ze (128), zc (128)] -> z_cond [B, 384]
         z_cond = torch.cat([zm, ze, zc], dim=1)        # [B, 384]
+
 
         # 5. Generate TargetNetwork weights via ContextHyperNetwork
         tn_weights_batch = self.hyper_network(z_cond)  # [B, total_weight_size]

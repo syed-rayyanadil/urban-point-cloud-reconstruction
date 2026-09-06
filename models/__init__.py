@@ -9,6 +9,10 @@ from .base_hyperpocket import (
     HyperPocketModel,
     generate_random_points,
 )
+from .context_hyperpocket import (
+    ContextHyperNetwork,
+    ContextHyperPocketModel,
+)
 
 __all__ = [
     'Encoder',
@@ -16,4 +20,6 @@ __all__ = [
     'TargetNetwork',
     'HyperPocketModel',
     'generate_random_points',
+    'ContextHyperNetwork',
+    'ContextHyperPocketModel',
 ]

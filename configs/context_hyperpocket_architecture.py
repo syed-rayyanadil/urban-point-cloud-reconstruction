@@ -19,6 +19,10 @@ CONTEXT_HYPERPOCKET_BASE = {
     'relu_slope'                 : 0.2,
     'target_network_layers'      : [32, 64, 128, 64],
     'use_context'                : True,
+    'encoder_type'               : 'pointnet',   # 'pointnet' | 'dgcnn' (Ec architecture)
+    'context_encoder_type'       : 'pointnet',   # Alias / specific selector for Ec
+    'dgcnn_k'                    : 20,           # k-NN neighbors for DGCNN Ec
+    'dgcnn_dropout'              : 0.0,          # Dropout for DGCNN projection head
     'neighbor_map_path'          : 'datasets/neighbor_map.json',
     'tile_centroids_path'        : 'datasets/tile_centroids.json',
 }
@@ -59,5 +63,17 @@ EXPERIMENTS = {
         'kl_anneal_warmup' : 15,       # Epochs 1-15: beta = 0
         'kl_anneal_end'    : 40,       # Epochs 16-40: beta 0 -> 0.001
         'wandb_run_name'   : 'CHP-SensatUrban-Exp3-ContextBetaAnnealing',
+    },
+
+    # 4. Experiment 4: Context DGCNN Encoder (Phase 5 - Dynamic Graph CNN Ec + Exp 1 Loss Parameters)
+    'exp4_dgcnn_context': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'dgcnn',
+        'context_encoder_type': 'dgcnn',
+        'dgcnn_k'             : 20,
+        'loss_coef'           : 0.05,     # CD loss coefficient (Faithful HyperPocket / Exp 1)
+        'kl_weight'           : 1.0,      # Weight for KL divergence term
+        'kl_anneal'           : False,    # Constant KL weight
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp4-DGCNN-Context',
     },
 }

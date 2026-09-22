@@ -13,6 +13,11 @@ from .context_hyperpocket import (
     ContextHyperNetwork,
     ContextHyperPocketModel,
 )
+from .dgcnn_context_encoder import (
+    knn,
+    get_graph_feature,
+    DGCNNContextEncoder,
+)
 
 __all__ = [
     'Encoder',
@@ -22,4 +27,7 @@ __all__ = [
     'generate_random_points',
     'ContextHyperNetwork',
     'ContextHyperPocketModel',
+    'knn',
+    'get_graph_feature',
+    'DGCNNContextEncoder',
 ]

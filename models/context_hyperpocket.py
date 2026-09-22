@@ -21,12 +21,14 @@ try:
         TargetNetwork,
         generate_random_points,
     )
+    from .dgcnn_context_encoder import DGCNNContextEncoder
 except ImportError:
     from base_hyperpocket import (
         Encoder,
         TargetNetwork,
         generate_random_points,
     )
+    from dgcnn_context_encoder import DGCNNContextEncoder
 
 
 class ContextHyperNetwork(nn.Module):
@@ -80,13 +82,21 @@ class ContextHyperPocketModel(nn.Module):
     Combines:
         - Real Encoder Ee (visible Pe -> ze, 128D)
         - Random Encoder Em (missing Pm -> zm, 128D, VAE)
-        - Context Encoder Ec (spatial Pc -> zc, 128D, deterministic)
+        - Context Encoder Ec (spatial Pc -> zc, 128D, deterministic PointNet or DGCNN)
         - Context HyperNetwork (takes [zm, ze, zc] 384D -> TargetNetwork weights)
         - TargetNetwork (implicit decoder: unit-ball points -> reconstructed 3D shape)
     """
 
-    def __init__(self, cfg):
+    def __init__(self, cfg=None, encoder_type=None, **kwargs):
         super().__init__()
+        if cfg is None:
+            cfg = {}
+        if isinstance(cfg, dict):
+            cfg = dict(cfg)
+        if encoder_type is not None:
+            cfg['encoder_type'] = encoder_type
+        cfg.update(kwargs)
+
         self.cfg        = cfg
         self.rand_sz    = cfg.get('random_encoder_output_size', 128)
         self.real_sz    = cfg.get('real_encoder_output_size', 128)
@@ -97,13 +107,32 @@ class ContextHyperPocketModel(nn.Module):
         self.progressive_norm_epochs = cfg.get('progressive_norm_epochs', 100)
         self.use_context = cfg.get('use_context', True)
 
+        # Context Encoder selection: 'pointnet' (default) vs 'dgcnn'
+        self.context_encoder_type = str(
+            cfg.get('context_encoder_type') or cfg.get('encoder_type') or 'pointnet'
+        ).lower()
+
         # 1. Encoders
-        # Ee — Real encoder for visible context Pe
+        # Ee — Real encoder for visible context Pe (PointNet)
         self.real_encoder = Encoder(self.real_sz, use_bias=self.use_bias, is_vae=False)
-        # Em — VAE Random encoder for missing target Pm
+        # Em — VAE Random encoder for missing target Pm (PointNet VAE)
         self.random_encoder = Encoder(self.rand_sz, use_bias=self.use_bias, is_vae=True)
-        # Ec — Context encoder for spatial neighborhood Pc
-        self.context_encoder = Encoder(self.context_sz, use_bias=self.use_bias, is_vae=False)
+        # Ec — Context encoder for spatial neighborhood Pc (PointNet or DGCNN)
+        if self.context_encoder_type == 'dgcnn':
+            dgcnn_k = cfg.get('dgcnn_k', 20)
+            dgcnn_dropout = cfg.get('dgcnn_dropout', 0.0)
+            self.context_encoder = DGCNNContextEncoder(
+                output_size=self.context_sz,
+                k=dgcnn_k,
+                dropout=dgcnn_dropout,
+            )
+        elif self.context_encoder_type == 'pointnet':
+            self.context_encoder = Encoder(self.context_sz, use_bias=self.use_bias, is_vae=False)
+        else:
+            raise ValueError(
+                f"Unsupported context encoder_type: '{self.context_encoder_type}'. "
+                f"Supported types: 'pointnet', 'dgcnn'."
+            )
 
         # 2. Context HyperNetwork (384D input: 128 zm + 128 ze + 128 zc)
         total_latent_dim = self.rand_sz + self.real_sz + self.context_sz

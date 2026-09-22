@@ -12,11 +12,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from models.context_hyperpocket import ContextHyperPocketModel
+from models.dgcnn_context_encoder import DGCNNContextEncoder
 
 
-def test_context_hyperpocket():
+def test_context_hyperpocket_pointnet():
     print("\n" + "=" * 70)
-    print("  ContextHyperPocketModel Architecture Self-Test Suite (Phase 3)")
+    print("  ContextHyperPocketModel (PointNet Ec) Architecture Self-Test")
     print("=" * 70)
 
     test_cfg = {
@@ -28,6 +29,7 @@ def test_context_hyperpocket():
         'target_network_layers'      : [32, 64, 128, 64],
         'progressive_norm_epochs'    : 100,
         'use_context'                : True,
+        'encoder_type'               : 'pointnet',
     }
 
     device = torch.device('cpu')
@@ -35,7 +37,7 @@ def test_context_hyperpocket():
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"\nModel Initialized Successfully:")
+    print(f"\nPointNet Model Initialized Successfully:")
     print(f"  Total Parameters     : {total_params:,}")
     print(f"  Trainable Parameters : {trainable_params:,}")
 
@@ -102,10 +104,94 @@ def test_context_hyperpocket():
     assert recon_eval.shape == (B, 3, N), f"Unexpected recon_eval shape: {recon_eval.shape}"
     print("  ✓ Generative inference mode executed successfully!")
 
+
+def test_context_hyperpocket_dgcnn():
     print("\n" + "=" * 70)
-    print("✓ ALL CONTEXT HYPERPOCKET MODEL TESTS (TRUE, ZEROS, RANDOM) PASSED!")
-    print("=" * 70 + "\n")
+    print("  ContextHyperPocketModel (DGCNN Ec) Architecture Integration Test")
+    print("=" * 70)
+
+    test_cfg = {
+        'n_points'                   : 1024,
+        'random_encoder_output_size' : 128,
+        'real_encoder_output_size'   : 128,
+        'context_encoder_output_size': 128,
+        'use_bias'                   : True,
+        'target_network_layers'      : [32, 64, 128, 64],
+        'progressive_norm_epochs'    : 100,
+        'use_context'                : True,
+        'encoder_type'               : 'dgcnn',
+        'dgcnn_k'                    : 20,
+        'dgcnn_dropout'              : 0.0,
+    }
+
+    device = torch.device('cpu')
+    model = ContextHyperPocketModel(test_cfg).to(device)
+
+    # Assert DGCNN encoder is properly instantiated
+    assert isinstance(model.context_encoder, DGCNNContextEncoder), "Context encoder is not DGCNNContextEncoder!"
+
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"\nDGCNN Model Initialized Successfully:")
+    print(f"  Total Parameters     : {total_params:,}")
+    print(f"  Trainable Parameters : {trainable_params:,}")
+
+    B, N = 2, 1024
+    Pe = torch.randn(B, N, 3, device=device, requires_grad=False)
+    Pm = torch.randn(B, N, 3, device=device, requires_grad=False)
+    Pc = torch.randn(B, N, 3, device=device, requires_grad=False)
+
+    # --- Test 1: Training forward pass with DGCNN Ec (context_mode='true') ---
+    print("\n[DGCNN Test 1] Training Forward Pass with DGCNN Ec:")
+    model.train()
+    recon_train, mu, logvar = model(Pe, Pm, Pc, epoch=1, device=device, context_mode="true")
+
+    print(f"  recon_train shape : {recon_train.shape}  # Expected: [2, 3, 1024]")
+    print(f"  mu shape          : {mu.shape}           # Expected: [2, 128]")
+    print(f"  logvar shape      : {logvar.shape}       # Expected: [2, 128]")
+
+    assert recon_train.shape == (B, 3, N), f"Unexpected recon shape: {recon_train.shape}"
+    assert mu.shape == (B, 128), f"Unexpected mu shape: {mu.shape}"
+    assert logvar.shape == (B, 128), f"Unexpected logvar shape: {logvar.shape}"
+
+    # Gradient check for DGCNN integration
+    loss = recon_train.sum() + mu.sum() + logvar.sum()
+    loss.backward()
+
+    # Check gradients in DGCNN encoder components
+    assert model.context_encoder.conv1[0].weight.grad is not None, "DGCNN conv1 received no gradients!"
+    assert model.context_encoder.conv2[0].weight.grad is not None, "DGCNN conv2 received no gradients!"
+    assert model.context_encoder.conv_fuse[0].weight.grad is not None, "DGCNN conv_fuse received no gradients!"
+    assert model.context_encoder.projection_head[0].weight.grad is not None, "DGCNN projection head received no gradients!"
+    assert model.hyper_network.backbone[0].weight.grad is not None, "HyperNetwork received no gradients!"
+    print("  ✓ Gradients successfully flowed through DGCNN Ec and into HyperNetwork!")
+
+    # --- Test 2: Evaluation Generative Inference with DGCNN Ec ---
+    print("\n[DGCNN Test 2] Evaluation Generative Inference:")
+    model.eval()
+    noise = torch.randn(B, 128, device=device) * 0.05
+    with torch.no_grad():
+        recon_eval = model(Pe, pm=None, pc=Pc, epoch=0, device=device, noise=noise, context_mode="true")
+    print(f"  recon_eval shape  : {recon_eval.shape}  # Expected: [2, 3, 1024]")
+    assert recon_eval.shape == (B, 3, N), f"Unexpected recon_eval shape: {recon_eval.shape}"
+    print("  ✓ DGCNN Generative inference mode executed successfully!")
+
+    # --- Test 3: Ablations with DGCNN model ---
+    with torch.no_grad():
+        recon_zeros = model(Pe, pm=None, pc=Pc, epoch=0, device=device, noise=noise, context_mode="zeros")
+        recon_random = model(Pe, pm=None, pc=Pc, epoch=0, device=device, noise=noise, context_mode="random")
+    assert recon_zeros.shape == (B, 3, N), f"Unexpected recon_zeros shape: {recon_zeros.shape}"
+    assert recon_random.shape == (B, 3, N), f"Unexpected recon_random shape: {recon_random.shape}"
+    print("  ✓ DGCNN Zero-context and random-context ablation checks passed!")
+
+
+# Alias for backward compatibility
+test_context_hyperpocket = test_context_hyperpocket_pointnet
 
 
 if __name__ == "__main__":
-    test_context_hyperpocket()
+    test_context_hyperpocket_pointnet()
+    test_context_hyperpocket_dgcnn()
+    print("\n" + "=" * 70)
+    print("✓ ALL CONTEXT HYPERPOCKET (POINTNET & DGCNN) INTEGRATION TESTS PASSED!")
+    print("=" * 70 + "\n")

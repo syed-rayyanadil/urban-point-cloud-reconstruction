@@ -22,6 +22,7 @@ try:
         generate_random_points,
     )
     from .dgcnn_context_encoder import DGCNNContextEncoder
+    from .cross_attention_encoder import CrossAttentionEncoder
 except ImportError:
     from base_hyperpocket import (
         Encoder,
@@ -29,6 +30,7 @@ except ImportError:
         generate_random_points,
     )
     from dgcnn_context_encoder import DGCNNContextEncoder
+    from cross_attention_encoder import CrossAttentionEncoder
 
 
 class ContextHyperNetwork(nn.Module):
@@ -82,7 +84,7 @@ class ContextHyperPocketModel(nn.Module):
     Combines:
         - Real Encoder Ee (visible Pe -> ze, 128D)
         - Random Encoder Em (missing Pm -> zm, 128D, VAE)
-        - Context Encoder Ec (spatial Pc -> zc, 128D, deterministic PointNet or DGCNN)
+        - Context Encoder Ec (spatial Pc -> zc, 128D, deterministic PointNet, DGCNN, or CrossAttention)
         - Context HyperNetwork (takes [zm, ze, zc] 384D -> TargetNetwork weights)
         - TargetNetwork (implicit decoder: unit-ball points -> reconstructed 3D shape)
     """
@@ -107,7 +109,7 @@ class ContextHyperPocketModel(nn.Module):
         self.progressive_norm_epochs = cfg.get('progressive_norm_epochs', 100)
         self.use_context = cfg.get('use_context', True)
 
-        # Context Encoder selection: 'pointnet' (default) vs 'dgcnn'
+        # Context Encoder selection: 'pointnet' (default) vs 'dgcnn' vs 'cross_attention'
         self.context_encoder_type = str(
             cfg.get('context_encoder_type') or cfg.get('encoder_type') or 'pointnet'
         ).lower()
@@ -117,7 +119,7 @@ class ContextHyperPocketModel(nn.Module):
         self.real_encoder = Encoder(self.real_sz, use_bias=self.use_bias, is_vae=False)
         # Em — VAE Random encoder for missing target Pm (PointNet VAE)
         self.random_encoder = Encoder(self.rand_sz, use_bias=self.use_bias, is_vae=True)
-        # Ec — Context encoder for spatial neighborhood Pc (PointNet or DGCNN)
+        # Ec — Context encoder for spatial neighborhood Pc (PointNet, DGCNN, or CrossAttention)
         if self.context_encoder_type == 'dgcnn':
             dgcnn_k = cfg.get('dgcnn_k', 20)
             dgcnn_dropout = cfg.get('dgcnn_dropout', 0.0)
@@ -126,12 +128,26 @@ class ContextHyperPocketModel(nn.Module):
                 k=dgcnn_k,
                 dropout=dgcnn_dropout,
             )
+        elif self.context_encoder_type in ['cross_attention', 'transformer', 'ca']:
+            d_model = cfg.get('ca_d_model', 128)
+            num_heads = cfg.get('ca_num_heads', 4)
+            num_queries = cfg.get('ca_num_queries', 1)
+            dim_ff = cfg.get('ca_dim_feedforward', 512)
+            dropout = cfg.get('ca_dropout', 0.0)
+            self.context_encoder = CrossAttentionEncoder(
+                output_size=self.context_sz,
+                d_model=d_model,
+                num_heads=num_heads,
+                dim_feedforward=dim_ff,
+                dropout=dropout,
+                num_queries=num_queries,
+            )
         elif self.context_encoder_type == 'pointnet':
             self.context_encoder = Encoder(self.context_sz, use_bias=self.use_bias, is_vae=False)
         else:
             raise ValueError(
                 f"Unsupported context encoder_type: '{self.context_encoder_type}'. "
-                f"Supported types: 'pointnet', 'dgcnn'."
+                f"Supported types: 'pointnet', 'dgcnn', 'cross_attention'."
             )
 
         # 2. Context HyperNetwork (384D input: 128 zm + 128 ze + 128 zc)

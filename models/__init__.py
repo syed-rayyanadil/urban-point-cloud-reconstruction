@@ -19,6 +19,8 @@ from .dgcnn_context_encoder import (
     DGCNNContextEncoder,
 )
 
+from .cross_attention_encoder import CrossAttentionEncoder
+
 __all__ = [
     'Encoder',
     'HyperNetwork',
@@ -30,4 +32,5 @@ __all__ = [
     'knn',
     'get_graph_feature',
     'DGCNNContextEncoder',
+    'CrossAttentionEncoder',
 ]

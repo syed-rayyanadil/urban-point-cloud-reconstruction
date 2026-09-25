@@ -19,10 +19,15 @@ CONTEXT_HYPERPOCKET_BASE = {
     'relu_slope'                 : 0.2,
     'target_network_layers'      : [32, 64, 128, 64],
     'use_context'                : True,
-    'encoder_type'               : 'pointnet',   # 'pointnet' | 'dgcnn' (Ec architecture)
+    'encoder_type'               : 'pointnet',   # 'pointnet' | 'dgcnn' | 'cross_attention' (Ec architecture)
     'context_encoder_type'       : 'pointnet',   # Alias / specific selector for Ec
     'dgcnn_k'                    : 20,           # k-NN neighbors for DGCNN Ec
     'dgcnn_dropout'              : 0.0,          # Dropout for DGCNN projection head
+    'ca_d_model'                 : 128,          # Cross-Attention token dimension
+    'ca_num_heads'               : 4,            # Cross-Attention multi-head count
+    'ca_num_queries'             : 1,            # Cross-Attention learnable query tokens count
+    'ca_dim_feedforward'         : 512,          # Cross-Attention FFN hidden dimension
+    'ca_dropout'                 : 0.0,          # Cross-Attention dropout probability
     'neighbor_map_path'          : 'datasets/neighbor_map.json',
     'tile_centroids_path'        : 'datasets/tile_centroids.json',
 }
@@ -75,5 +80,16 @@ EXPERIMENTS = {
         'kl_weight'           : 1.0,      # Weight for KL divergence term
         'kl_anneal'           : False,    # Constant KL weight
         'wandb_run_name'      : 'CHP-SensatUrban-Exp4-DGCNN-Context',
+    },
+
+    # 5. Experiment 5: Context Cross-Attention Transformer (Phase 6 - Set Transformer Ec)
+    'exp5_cross_attention_context': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'cross_attention',
+        'context_encoder_type': 'cross_attention',
+        'loss_coef'           : 0.05,     # Proven winning loss setup
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp5-CrossAttention-Context',
     },
 }

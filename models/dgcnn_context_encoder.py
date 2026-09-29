@@ -94,56 +94,72 @@ class DGCNNContextEncoder(nn.Module):
         dropout (float): Dropout probability in bottleneck projection head (default: 0.0).
     """
 
-    def __init__(self, output_size: int = 128, k: int = 20, dropout: float = 0.0):
+    def __init__(
+        self,
+        output_size: int = 128,
+        k: int = 20,
+        dropout: float = 0.0,
+        channels: list = None,
+        pooling: str = 'dual_max_avg',
+    ):
         super().__init__()
         self.output_size = output_size
         self.k = k
         self.dropout = dropout
+        if channels is None:
+            channels = [64, 64, 128, 256]
+        self.channels = channels
+        self.pooling = pooling.lower()
 
-        # --- EdgeConv Block 1 (Input coordinates C=3 -> 64) ---
+        c1, c2, c3, c4 = channels
+
+        # --- EdgeConv Block 1 (Input coordinates C=3 -> c1) ---
         self.conv1 = nn.Sequential(
-            nn.Conv2d(6, 64, kernel_size=1, bias=False),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(6, c1, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c1),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Conv2d(64, 64, kernel_size=1, bias=False),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(c1, c1, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c1),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
         )
 
-        # --- EdgeConv Block 2 (C=64 -> 64) ---
+        # --- EdgeConv Block 2 (C=c1 -> c2) ---
         self.conv2 = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=1, bias=False),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(2 * c1, c2, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c2),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Conv2d(64, 64, kernel_size=1, bias=False),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(c2, c2, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c2),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
         )
 
-        # --- EdgeConv Block 3 (C=64 -> 128) ---
+        # --- EdgeConv Block 3 (C=c2 -> c3) ---
         self.conv3 = nn.Sequential(
-            nn.Conv2d(128, 128, kernel_size=1, bias=False),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(2 * c2, c3, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c3),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
         )
 
-        # --- EdgeConv Block 4 (C=128 -> 256) ---
+        # --- EdgeConv Block 4 (C=c3 -> c4) ---
         self.conv4 = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=1, bias=False),
-            nn.BatchNorm2d(256),
+            nn.Conv2d(2 * c3, c4, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c4),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
         )
 
-        # --- Multi-scale feature fusion (64 + 64 + 128 + 256 = 512 -> 1024) ---
+        # --- Multi-scale feature fusion (c1 + c2 + c3 + c4 -> 1024) ---
+        fused_in_dim = c1 + c2 + c3 + c4
         self.conv_fuse = nn.Sequential(
-            nn.Conv1d(512, 1024, kernel_size=1, bias=False),
+            nn.Conv1d(fused_in_dim, 1024, kernel_size=1, bias=False),
             nn.BatchNorm1d(1024),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
         )
 
-        # --- Bottleneck projection MLP: 2048 -> 512 -> 256 -> output_size (128) ---
+        # --- Bottleneck projection MLP ---
+        # Dual pooling concatenates Max + Avg (1024 * 2 = 2048), max_only uses Max (1024)
+        proj_in_dim = 2048 if self.pooling == 'dual_max_avg' else 1024
         proj_layers = [
-            nn.Linear(2048, 512, bias=False),
+            nn.Linear(proj_in_dim, 512, bias=False),
             nn.BatchNorm1d(512),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
         ]
@@ -201,10 +217,13 @@ class DGCNNContextEncoder(nn.Module):
         x_multi = torch.cat([x1, x2, x3, x4], dim=1)        # [B, 512, N]
         x_fused = self.conv_fuse(x_multi)                   # [B, 1024, N]
 
-        # 6. Global pooling (Max + Avg)
+        # 6. Global pooling (Max + Avg vs Max Only)
         x_max = torch.max(x_fused, dim=-1, keepdim=False)[0] # [B, 1024]
-        x_avg = torch.mean(x_fused, dim=-1, keepdim=False)   # [B, 1024]
-        x_global = torch.cat([x_max, x_avg], dim=1)         # [B, 2048]
+        if self.pooling == 'max_only':
+            x_global = x_max                                 # [B, 1024]
+        else:
+            x_avg = torch.mean(x_fused, dim=-1, keepdim=False)   # [B, 1024]
+            x_global = torch.cat([x_max, x_avg], dim=1)         # [B, 2048]
 
         # 7. Bottleneck projection head
         zc = self.projection_head(x_global)                 # [B, output_size]

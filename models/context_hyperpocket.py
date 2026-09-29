@@ -123,10 +123,14 @@ class ContextHyperPocketModel(nn.Module):
         if self.context_encoder_type == 'dgcnn':
             dgcnn_k = cfg.get('dgcnn_k', 20)
             dgcnn_dropout = cfg.get('dgcnn_dropout', 0.0)
+            dgcnn_channels = cfg.get('dgcnn_channels', None)
+            dgcnn_pooling = cfg.get('dgcnn_pooling', 'dual_max_avg')
             self.context_encoder = DGCNNContextEncoder(
                 output_size=self.context_sz,
                 k=dgcnn_k,
                 dropout=dgcnn_dropout,
+                channels=dgcnn_channels,
+                pooling=dgcnn_pooling,
             )
         elif self.context_encoder_type in ['cross_attention', 'transformer', 'ca']:
             d_model = cfg.get('ca_d_model', 128)

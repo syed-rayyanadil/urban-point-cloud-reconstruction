@@ -23,6 +23,8 @@ CONTEXT_HYPERPOCKET_BASE = {
     'context_encoder_type'       : 'pointnet',   # Alias / specific selector for Ec
     'dgcnn_k'                    : 20,           # k-NN neighbors for DGCNN Ec
     'dgcnn_dropout'              : 0.0,          # Dropout for DGCNN projection head
+    'dgcnn_channels'             : [64, 64, 128, 256],# Feature channels for 4 EdgeConv layers
+    'dgcnn_pooling'              : 'dual_max_avg',   # 'dual_max_avg' (2048D) | 'max_only' (1024D)
     'ca_d_model'                 : 128,          # Cross-Attention token dimension
     'ca_num_heads'               : 4,            # Cross-Attention multi-head count
     'ca_num_queries'             : 1,            # Cross-Attention learnable query tokens count
@@ -82,6 +84,50 @@ EXPERIMENTS = {
         'wandb_run_name'      : 'CHP-SensatUrban-Exp4-DGCNN-Context',
     },
 
+    # --- DGCNN Ablation Family (Exp 4a - 4d) ---
+    'exp4a_dgcnn_k10': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'dgcnn',
+        'context_encoder_type': 'dgcnn',
+        'dgcnn_k'             : 10,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp4a-DGCNN-k10',
+    },
+    'exp4b_dgcnn_k40': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'dgcnn',
+        'context_encoder_type': 'dgcnn',
+        'dgcnn_k'             : 40,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp4b-DGCNN-k40',
+    },
+    'exp4c_dgcnn_light_channels': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'dgcnn',
+        'context_encoder_type': 'dgcnn',
+        'dgcnn_k'             : 20,
+        'dgcnn_channels'      : [32, 32, 64, 128],
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp4c-DGCNN-LightChannels',
+    },
+    'exp4d_dgcnn_max_only': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'dgcnn',
+        'context_encoder_type': 'dgcnn',
+        'dgcnn_k'             : 20,
+        'dgcnn_pooling'       : 'max_only',
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp4d-DGCNN-MaxOnly',
+    },
+
     # 5. Experiment 5: Context Cross-Attention Transformer (Phase 6 - Set Transformer Ec)
     'exp5_cross_attention_context': {
         **CONTEXT_HYPERPOCKET_BASE,
@@ -91,5 +137,47 @@ EXPERIMENTS = {
         'kl_weight'           : 1.0,
         'kl_anneal'           : False,
         'wandb_run_name'      : 'CHP-SensatUrban-Exp5-CrossAttention-Context',
+    },
+
+    # --- Cross-Attention Transformer Ablation Family (Exp 5a - 5d) ---
+    'exp5a_ca_dim64': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'cross_attention',
+        'context_encoder_type': 'cross_attention',
+        'ca_d_model'          : 64,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp5a-CA-Dim64',
+    },
+    'exp5b_ca_dim256': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'cross_attention',
+        'context_encoder_type': 'cross_attention',
+        'ca_d_model'          : 256,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp5b-CA-Dim256',
+    },
+    'exp5c_ca_heads2': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'cross_attention',
+        'context_encoder_type': 'cross_attention',
+        'ca_num_heads'        : 2,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp5c-CA-Heads2',
+    },
+    'exp5d_ca_heads8': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'cross_attention',
+        'context_encoder_type': 'cross_attention',
+        'ca_num_heads'        : 8,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp5d-CA-Heads8',
     },
 }

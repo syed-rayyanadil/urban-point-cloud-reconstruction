@@ -30,6 +30,14 @@ CONTEXT_HYPERPOCKET_BASE = {
     'ca_num_queries'             : 1,            # Cross-Attention learnable query tokens count
     'ca_dim_feedforward'         : 512,          # Cross-Attention FFN hidden dimension
     'ca_dropout'                 : 0.0,          # Cross-Attention dropout probability
+    'mamba_d_model'              : 128,          # Point Mamba token feature dimension
+    'mamba_d_state'              : 16,           # Point Mamba state space expansion dimension
+    'mamba_d_conv'               : 4,            # Point Mamba 1D depthwise conv kernel width
+    'mamba_expand'               : 2,            # Point Mamba inner dimension expansion factor
+    'mamba_num_layers'           : 2,            # Point Mamba stacked layer count
+    'mamba_order'                : 'z_order',    # Point serialization: 'z_order' | 'coord_sort'
+    'mamba_scan'                 : 'bidirectional', # Scanning direction: 'bidirectional' | 'unidirectional'
+    'mamba_dropout'              : 0.0,          # Point Mamba dropout rate
     'neighbor_map_path'          : 'datasets/neighbor_map.json',
     'tile_centroids_path'        : 'datasets/tile_centroids.json',
 }
@@ -179,5 +187,87 @@ EXPERIMENTS = {
         'kl_weight'           : 1.0,
         'kl_anneal'           : False,
         'wandb_run_name'      : 'CHP-SensatUrban-Exp5d-CA-Heads8',
+    },
+
+    # 6. Experiment 6: Point Mamba Context Encoder (Phase 7 - State Space Model Ec)
+    'exp6_mamba_context': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'mamba',
+        'context_encoder_type': 'mamba',
+        'mamba_scan'          : 'bidirectional',
+        'mamba_order'         : 'z_order',
+        'mamba_d_model'       : 128,
+        'mamba_d_state'       : 16,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp6-PointMamba-Context',
+    },
+
+    # --- Point Mamba Ablation Family (Exp 6a - 6e) ---
+    'exp6a_mamba_unidirectional': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'mamba',
+        'context_encoder_type': 'mamba',
+        'mamba_scan'          : 'unidirectional',
+        'mamba_order'         : 'z_order',
+        'mamba_d_model'       : 128,
+        'mamba_d_state'       : 16,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp6a-Mamba-Unidirectional',
+    },
+    'exp6b_mamba_coord_sort': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'mamba',
+        'context_encoder_type': 'mamba',
+        'mamba_scan'          : 'bidirectional',
+        'mamba_order'         : 'coord_sort',
+        'mamba_d_model'       : 128,
+        'mamba_d_state'       : 16,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp6b-Mamba-CoordSort',
+    },
+    'exp6c_mamba_dim256': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'mamba',
+        'context_encoder_type': 'mamba',
+        'mamba_scan'          : 'bidirectional',
+        'mamba_order'         : 'z_order',
+        'mamba_d_model'       : 256,
+        'mamba_d_state'       : 16,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp6c-Mamba-Dim256',
+    },
+    'exp6d_mamba_dim64': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'mamba',
+        'context_encoder_type': 'mamba',
+        'mamba_scan'          : 'bidirectional',
+        'mamba_order'         : 'z_order',
+        'mamba_d_model'       : 64,
+        'mamba_d_state'       : 16,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp6d-Mamba-Dim64',
+    },
+    'exp6e_mamba_state32': {
+        **CONTEXT_HYPERPOCKET_BASE,
+        'encoder_type'        : 'mamba',
+        'context_encoder_type': 'mamba',
+        'mamba_scan'          : 'bidirectional',
+        'mamba_order'         : 'z_order',
+        'mamba_d_model'       : 128,
+        'mamba_d_state'       : 32,
+        'loss_coef'           : 0.05,
+        'kl_weight'           : 1.0,
+        'kl_anneal'           : False,
+        'wandb_run_name'      : 'CHP-SensatUrban-Exp6e-Mamba-State32',
     },
 }

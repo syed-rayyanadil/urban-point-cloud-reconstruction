@@ -23,6 +23,7 @@ try:
     )
     from .dgcnn_context_encoder import DGCNNContextEncoder
     from .cross_attention_encoder import CrossAttentionEncoder
+    from .point_mamba_encoder import PointMambaContextEncoder
 except ImportError:
     from base_hyperpocket import (
         Encoder,
@@ -31,6 +32,7 @@ except ImportError:
     )
     from dgcnn_context_encoder import DGCNNContextEncoder
     from cross_attention_encoder import CrossAttentionEncoder
+    from point_mamba_encoder import PointMambaContextEncoder
 
 
 class ContextHyperNetwork(nn.Module):
@@ -146,12 +148,33 @@ class ContextHyperPocketModel(nn.Module):
                 dropout=dropout,
                 num_queries=num_queries,
             )
+        elif self.context_encoder_type in ['mamba', 'point_mamba', 'pointmamba', 'ssm']:
+            mamba_d_model    = cfg.get('mamba_d_model', 128)
+            mamba_d_state    = cfg.get('mamba_d_state', 16)
+            mamba_d_conv     = cfg.get('mamba_d_conv', 4)
+            mamba_expand     = cfg.get('mamba_expand', 2)
+            mamba_num_layers = cfg.get('mamba_num_layers', 2)
+            mamba_order      = cfg.get('mamba_order', 'z_order')
+            mamba_scan       = cfg.get('mamba_scan', 'bidirectional')
+            mamba_dropout    = cfg.get('mamba_dropout', 0.0)
+
+            self.context_encoder = PointMambaContextEncoder(
+                output_size = self.context_sz,
+                d_model     = mamba_d_model,
+                d_state     = mamba_d_state,
+                d_conv      = mamba_d_conv,
+                expand      = mamba_expand,
+                num_layers  = mamba_num_layers,
+                order       = mamba_order,
+                scan_dir    = mamba_scan,
+                dropout     = mamba_dropout,
+            )
         elif self.context_encoder_type == 'pointnet':
             self.context_encoder = Encoder(self.context_sz, use_bias=self.use_bias, is_vae=False)
         else:
             raise ValueError(
                 f"Unsupported context encoder_type: '{self.context_encoder_type}'. "
-                f"Supported types: 'pointnet', 'dgcnn', 'cross_attention'."
+                f"Supported types: 'pointnet', 'dgcnn', 'cross_attention', 'point_mamba'."
             )
 
         # 2. Context HyperNetwork (384D input: 128 zm + 128 ze + 128 zc)

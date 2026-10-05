@@ -20,6 +20,12 @@ from .dgcnn_context_encoder import (
 )
 
 from .cross_attention_encoder import CrossAttentionEncoder
+from .point_mamba_encoder import (
+    PointMambaContextEncoder,
+    serialize_point_cloud,
+    compute_morton_order,
+    compute_coord_order,
+)
 
 __all__ = [
     'Encoder',
@@ -33,4 +39,8 @@ __all__ = [
     'get_graph_feature',
     'DGCNNContextEncoder',
     'CrossAttentionEncoder',
+    'PointMambaContextEncoder',
+    'serialize_point_cloud',
+    'compute_morton_order',
+    'compute_coord_order',
 ]

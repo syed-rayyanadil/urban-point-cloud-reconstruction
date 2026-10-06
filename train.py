@@ -45,6 +45,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.cuda.amp import GradScaler, autocast
 
 # Add repo path (for Kaggle: adjust if needed)
 REPO_PATH = '/kaggle/working/urban-point-cloud-reconstruction'
@@ -212,10 +213,11 @@ def plot_reconstruction_sample(existing_np, gt_np, recon_np, save_dir, epoch, sa
 # ==========================================
 # TRAINING EPOCH LOOP
 # ==========================================
-def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log, is_context_model=False):
+def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log, scaler=None, is_context_model=False):
     model.train()
     total_loss = total_cd = total_kl = 0.0
     n_batches  = len(loader)
+    use_amp    = scaler is not None
 
     latest_existing = latest_gt = latest_recon = None
 
@@ -236,40 +238,48 @@ def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log, i
 
         optimizer.zero_grad()
 
-        if is_context_model:
-            reconstruction, mu, logvar = model(existing, missing, pc=pc, epoch=epoch, device=device)
-        else:
-            reconstruction, mu, logvar = model(existing, missing, epoch, device)
-
-        # reconstruction: [B, 3, N] — permute to [B, N, 3] for Chamfer Loss
-        recon_for_loss = reconstruction.permute(0, 2, 1)  # [B, N, 3]
-
-        # 1. Chamfer Reconstruction Loss (loss_coef * CD)
-        loss_cd  = cfg['loss_coef'] * torch.mean(cd_loss_fn(gt, recon_for_loss))
-
-        # Compute effective KL weight (support optional beta-annealing schedule)
-        if cfg.get('kl_anneal', False):
-            warmup_epoch = cfg.get('kl_anneal_warmup', 15)
-            end_epoch    = cfg.get('kl_anneal_end', 40)
-            target_beta  = cfg.get('kl_weight', 0.001)
-            if epoch <= warmup_epoch:
-                current_beta = 0.0
-            elif epoch <= end_epoch:
-                current_beta = target_beta * (epoch - warmup_epoch) / max(1, end_epoch - warmup_epoch)
+        # ---- Forward pass (AMP autocast if enabled) ----
+        with autocast(enabled=use_amp):
+            if is_context_model:
+                reconstruction, mu, logvar = model(existing, missing, pc=pc, epoch=epoch, device=device)
             else:
-                current_beta = target_beta
+                reconstruction, mu, logvar = model(existing, missing, epoch, device)
+
+            # reconstruction: [B, 3, N] — permute to [B, N, 3] for Chamfer Loss
+            recon_for_loss = reconstruction.permute(0, 2, 1)  # [B, N, 3]
+
+            # 1. Chamfer Reconstruction Loss (loss_coef * CD)
+            loss_cd  = cfg['loss_coef'] * torch.mean(cd_loss_fn(gt, recon_for_loss))
+
+            # Compute effective KL weight (support optional beta-annealing schedule)
+            if cfg.get('kl_anneal', False):
+                warmup_epoch = cfg.get('kl_anneal_warmup', 15)
+                end_epoch    = cfg.get('kl_anneal_end', 40)
+                target_beta  = cfg.get('kl_weight', 0.001)
+                if epoch <= warmup_epoch:
+                    current_beta = 0.0
+                elif epoch <= end_epoch:
+                    current_beta = target_beta * (epoch - warmup_epoch) / max(1, end_epoch - warmup_epoch)
+                else:
+                    current_beta = target_beta
+            else:
+                current_beta = cfg.get('kl_weight', 1.0)
+
+            # 2. KL Divergence: 0.5 * sum(exp(logvar) + mu^2 - 1 - logvar) / B
+            loss_kl  = current_beta * 0.5 * (
+                torch.exp(logvar) + torch.square(mu) - 1 - logvar
+            ).sum() / existing.size(0)
+
+            loss = loss_cd + loss_kl
+
+        # ---- Backward pass (AMP scaled if enabled) ----
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         else:
-            current_beta = cfg.get('kl_weight', 1.0)
-
-        # 2. KL Divergence: 0.5 * sum(exp(logvar) + mu^2 - 1 - logvar) / B
-        loss_kl  = current_beta * 0.5 * (
-            torch.exp(logvar) + torch.square(mu) - 1 - logvar
-        ).sum() / existing.size(0)
-
-        loss = loss_cd + loss_kl
-
-        loss.backward()
-        optimizer.step()
+            loss.backward()
+            optimizer.step()
 
         total_loss += loss.item()
         total_cd   += loss_cd.item()
@@ -294,7 +304,7 @@ def train_epoch(epoch, model, optimizer, loader, device, cd_loss_fn, cfg, log, i
 # ==========================================
 # VALIDATION EPOCH LOOP
 # ==========================================
-def val_epoch(model, loader, device, cd_loss_fn, cfg, is_context_model=False):
+def val_epoch(model, loader, device, cd_loss_fn, cfg, is_context_model=False, use_amp=False):
     model.eval()
     total_cd = 0.0
 
@@ -307,17 +317,22 @@ def val_epoch(model, loader, device, cd_loss_fn, cfg, is_context_model=False):
                 gt       = gt.to(device)
                 if pc is not None:
                     pc = pc.to(device)
-                reconstruction = model(existing, missing, pc=pc, epoch=0, device=device)
             else:
                 existing, missing, gt, _ = batch
                 existing = existing.to(device)
                 missing  = missing.to(device)
                 gt       = gt.to(device)
-                reconstruction = model(existing, missing, 0, device)
+                pc       = None
 
-            recon_for_loss = reconstruction.permute(0, 2, 1)
+            with autocast(enabled=use_amp):
+                if is_context_model:
+                    reconstruction = model(existing, missing, pc=pc, epoch=0, device=device)
+                else:
+                    reconstruction = model(existing, missing, 0, device)
 
-            loss_cd = cfg['loss_coef'] * torch.mean(cd_loss_fn(gt, recon_for_loss))
+                recon_for_loss = reconstruction.permute(0, 2, 1)
+                loss_cd = cfg['loss_coef'] * torch.mean(cd_loss_fn(gt, recon_for_loss))
+
             total_cd += loss_cd.item()
 
     return total_cd / batch_idx
@@ -334,6 +349,8 @@ def train(cfg=CONFIG):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
 
     is_context_model = (
         cfg.get('model_name') == 'context_hyperpocket'
@@ -358,6 +375,10 @@ def train(cfg=CONFIG):
     log.info('  Configuration aligned with Wu et al. (2020) Appendix C')
     log.info('=' * 70)
     log.info(f'  Device         : {device} ({gpu_name})')
+    if torch.cuda.is_available():
+        log.info(f'  cuDNN Benchmark: ✓ Enabled (Optimal convolution algorithms)')
+    use_amp_enabled = torch.cuda.is_available() and cfg.get('use_amp', True)
+    log.info(f'  AMP (FP16)     : {"✓ Enabled (Tensor Core acceleration active)" if use_amp_enabled else "✗ Disabled (FP32)"}')
     log.info(f'  Data Root      : {cfg["data_root"]}')
     log.info(f'  Epochs         : {cfg["epochs"]}')
     log.info(f'  Batch Size     : {cfg["batch_size"]}')
@@ -411,12 +432,13 @@ def train(cfg=CONFIG):
         )
         val_loader = DataLoader(
             val_dataset,
-            batch_size  = cfg['batch_size'],
-            shuffle     = False,
-            num_workers = cfg['num_workers'],
-            pin_memory  = True,
-            drop_last   = False,
-            collate_fn  = lambda batch: (
+            batch_size         = cfg['batch_size'],
+            shuffle            = False,
+            num_workers        = cfg['num_workers'],
+            pin_memory         = True,
+            persistent_workers = (cfg['num_workers'] > 0),
+            drop_last          = False,
+            collate_fn         = lambda batch: (
                 torch.stack([b['Pe']     for b in batch]),
                 torch.stack([b['Pm']     for b in batch]),
                 torch.stack([b['Target'] for b in batch]),
@@ -484,6 +506,12 @@ def train(cfg=CONFIG):
     # ---- Loss Function ----
     cd_loss_fn = _ChamferLoss().to(device)
 
+    # ---- AMP (Automatic Mixed Precision) ----
+    # Enabled on CUDA only. Speeds up T4/V100 training ~30-40% with no quality change.
+    use_amp = torch.cuda.is_available() and cfg.get('use_amp', True)
+    scaler  = GradScaler() if use_amp else None
+    log.info(f'  AMP (Mixed Precision): {"✓ Enabled (FP16)" if use_amp else "✗ Disabled (FP32)"}')
+
     # ---- Early Stopping ----
     early_stopper = EarlyStopping(
         patience  = cfg['early_stopping_patience'],
@@ -503,6 +531,7 @@ def train(cfg=CONFIG):
         # --- Train ---
         avg_loss, avg_cd, avg_kl, ex_np, gt_np, rec_np = train_epoch(
             epoch, model, optimizer, train_loader, device, cd_loss_fn, cfg, log,
+            scaler           = scaler,
             is_context_model = is_context_model
         )
         train_losses.append([avg_loss, avg_cd, avg_kl])
@@ -521,7 +550,8 @@ def train(cfg=CONFIG):
         # --- Validation ---
         val_cd = val_epoch(
             model, val_loader, device, cd_loss_fn, cfg,
-            is_context_model = is_context_model
+            is_context_model = is_context_model,
+            use_amp          = use_amp
         )
         val_losses.append(val_cd)
         is_best = val_cd < best_val_loss

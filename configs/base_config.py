@@ -8,11 +8,14 @@ completion models (dataset paths, optimizer, progressive norm, WandB).
 import os
 
 GLOBAL_BASE_CONFIG = {
-    # Dataset & DataLoader
+    # Dataset & DataLoader (Accelerated: batch_size=10 utilizes T4 Tensor Cores)
     'data_root'                 : '/kaggle/input/sensaturban-out/SensatUrban_Out',
     'n_points'                  : 1024,
-    'batch_size'                : 5,
+    'batch_size'                : 10,
     'num_workers'               : 4,
+
+    # Automatic Mixed Precision (FP16 hardware acceleration on GPU)
+    'use_amp'                   : True,
 
     # Optimizer & Scheduler Defaults (Adam + StepLR per HyperPocket Appendix C)
     'epochs'                    : 200,

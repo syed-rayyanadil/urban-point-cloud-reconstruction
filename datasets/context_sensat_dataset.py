@@ -276,12 +276,13 @@ def get_context_dataloader(
 
     loader = DataLoader(
         dataset,
-        batch_size  = batch_size,
-        shuffle     = is_train,
-        num_workers = num_workers,
-        pin_memory  = pin_memory,
-        drop_last   = is_train,
-        collate_fn  = collate_fn,
+        batch_size         = batch_size,
+        shuffle            = is_train,
+        num_workers        = num_workers,
+        pin_memory         = pin_memory,
+        persistent_workers = (num_workers > 0),
+        drop_last          = is_train,
+        collate_fn         = collate_fn,
     )
 
     print(f"[ContextDataLoader] '{split}' — {len(dataset)} blocks | "

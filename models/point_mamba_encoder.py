@@ -227,10 +227,11 @@ class PureSelectiveSSM(nn.Module):
         dB_x_list = dB_x.unbind(dim=1)
         C_list = C_ssm.unbind(dim=1)
 
-        # Fast unbind iteration
+        # Fast unbind iteration with batched matrix-vector projection
         for da_t, db_x_t, c_t in zip(dA_list, dB_x_list, C_list):
             h = da_t * h + db_x_t
-            y_t = (h * c_t.unsqueeze(1)).sum(dim=-1)
+            # [B, d_inner, d_state] x [B, d_state, 1] -> [B, d_inner]
+            y_t = torch.matmul(h, c_t.unsqueeze(-1)).squeeze(-1)
             ys.append(y_t)
 
         y = torch.stack(ys, dim=1)  # [B, L, d_inner]

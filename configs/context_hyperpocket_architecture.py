@@ -34,7 +34,7 @@ CONTEXT_HYPERPOCKET_BASE = {
     'mamba_d_state'              : 16,           # Point Mamba state space expansion dimension
     'mamba_d_conv'               : 4,            # Point Mamba 1D depthwise conv kernel width
     'mamba_expand'               : 2,            # Point Mamba inner dimension expansion factor
-    'mamba_num_layers'           : 2,            # Point Mamba stacked layer count
+    'mamba_num_layers'           : 1,            # Point Mamba stacked layer count (1 layer = fwd + bwd scans)
     'mamba_order'                : 'z_order',    # Point serialization: 'z_order' | 'coord_sort'
     'mamba_scan'                 : 'bidirectional', # Scanning direction: 'bidirectional' | 'unidirectional'
     'mamba_dropout'              : 0.0,          # Point Mamba dropout rate

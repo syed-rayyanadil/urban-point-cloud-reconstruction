@@ -23,58 +23,68 @@ This work investigates a generative formulation based on Variational Autoencoder
 
 ## 2. Methodology
 
-The proposed approach extends the implicit completion formulation of HyperPocket (Wu et al., 2022) to large-scale urban domains by incorporating a dedicated Context Encoder ($E_c$).
+The proposed approach extends the implicit completion formulation of HyperPocket (Wu et al., 2022) to large-scale urban domains by incorporating a dedicated Context Encoder (E<sub>c</sub>).
 
 <p align="center">
   <img src="assets/architecture_diagram.png" alt="System Architecture Overview" width="90%">
   <br>
-  <em><b>Figure 1: Architectural Overview.</b> The framework processes three point sets: visible context ($P_e$), target missing geometry ($P_m$), and spatial neighborhood context ($P_c$). Latent representations from deterministic and stochastic encoders are concatenated to condition the HyperNetwork, which synthesizes the weights for an implicit TargetNetwork decoder.</em>
+  <em><b>Figure 1: Architectural Overview.</b> The framework processes three point sets: visible context (P<sub>e</sub>), target missing geometry (P<sub>m</sub>), and spatial neighborhood context (P<sub>c</sub>). Latent representations from deterministic and stochastic encoders are concatenated to condition the HyperNetwork, which synthesizes the weights for an implicit TargetNetwork decoder.</em>
 </p>
 
 ### 2.1 Problem Formulation and Data Representation
-Let an urban scene be partitioned into ground blocks of size $30\,\text{m} \times 30\,\text{m}$, subsampled to a fixed budget of $N = 1,024$ points per block:
-* $P_e \in \mathbb{R}^{N \times 3}$: Visible context partition obtained via synthetic 3D hyperplane partitioning through the block centroid.
-* $P_m \in \mathbb{R}^{N \times 3}$: Missing target geometry to be reconstructed.
-* $P_c \in \mathbb{R}^{N \times 3}$: Spatial neighborhood context composed of the $K=4$ nearest physical neighbor blocks identified using a 2D $k$-d tree. Neighbors are translated by their relative spatial centroid offsets before concatenation and resampling:
-  $$P_{\text{aligned}} = P_{\text{neighbor}} + \left(\mathbf{C}_{\text{neighbor}} - \mathbf{C}_{\text{target}}\right)$$
+Let an urban scene be partitioned into ground blocks of size 30 m × 30 m, subsampled to a fixed budget of N = 1,024 points per block:
+* **P<sub>e</sub> ∈ ℝ<sup>N × 3</sup>:** Visible context partition obtained via synthetic 3D hyperplane partitioning through the block centroid.
+* **P<sub>m</sub> ∈ ℝ<sup>N × 3</sup>:** Missing target geometry to be reconstructed.
+* **P<sub>c</sub> ∈ ℝ<sup>N × 3</sup>:** Spatial neighborhood context composed of the K = 4 nearest physical neighbor blocks identified using a 2D k-d tree. Neighbors are translated by their relative spatial centroid offsets before concatenation and resampling:
 
-All point coordinates are normalized to the unit sphere $[-1, 1]^3$.
+$$
+\mathbf{P}_{\text{aligned}} = \mathbf{P}_{\text{neighbor}} + \left(\mathbf{C}_{\text{neighbor}} - \mathbf{C}_{\text{target}}\right)
+$$
+
+All point coordinates are normalized to the unit sphere [-1, 1]³.
 
 ### 2.2 Multi-Encoder Generative Architecture
-1. **Visible Encoder ($E_e$):** A deterministic PointNet mapping the visible context to latent code $z_e \in \mathbb{R}^{128}$.
-2. **Missing Target Encoder ($E_m$):** A stochastic PointNet parameterizing a Gaussian distribution $q(z_m \mid P_m) = \mathcal{N}(\mu, \Sigma)$, yielding latent sample $z_m \in \mathbb{R}^{128}$ via the reparameterization trick.
-3. **Context Encoder ($E_c$):** A feature extraction module mapping spatial neighborhood point cloud $P_c$ to context vector $z_c \in \mathbb{R}^{128}$.
+1. **Visible Encoder (E<sub>e</sub>):** A deterministic PointNet mapping visible context to latent code **z<sub>e</sub> ∈ ℝ¹²⁸**.
+2. **Missing Target Encoder (E<sub>m</sub>):** A stochastic PointNet parameterizing a Gaussian distribution **q(z<sub>m</sub> | P<sub>m</sub>) = 𝒩(μ, Σ)**, yielding latent sample **z<sub>m</sub> ∈ ℝ¹²⁸** via the reparameterization trick.
+3. **Context Encoder (E<sub>c</sub>):** A feature extraction module mapping spatial neighborhood point cloud P<sub>c</sub> to context vector **z<sub>c</sub> ∈ ℝ¹²⁸**.
 4. **Conditioned Latent Representation:**
-   $$z_{\text{cond}} = [z_m, z_e, z_c] \in \mathbb{R}^{384}$$
+
+$$
+\mathbf{z}_{\text{cond}} = [\mathbf{z}_m, \mathbf{z}_e, \mathbf{z}_c] \in \mathbb{R}^{384}
+$$
 
 ### 2.3 Context Encoder Architectures Evaluated
-To understand how spatial context is best encoded, three distinct neural network paradigms are investigated for $E_c$:
+To understand how spatial context is best encoded, three distinct neural network paradigms are investigated for E<sub>c</sub>:
 * **PointNet:** A global pooling architecture applying multi-layer perceptrons independently to each point, followed by symmetric max-pooling.
-* **Dynamic Graph CNN (DGCNN):** An edge-convolutional network constructing dynamic $k$-NN graphs in feature space to capture fine-grained architectural contours and topological continuity across block boundaries.
+* **Dynamic Graph CNN (DGCNN):** An edge-convolutional network constructing dynamic k-NN graphs in feature space to capture fine-grained architectural contours and topological continuity across block boundaries.
 * **Latent Cross-Attention Transformer:** A Set Transformer utilizing Pooling by Multihead Attention (PMA), where a learnable query vector attends over input coordinates with linear computational complexity.
 
 ### 2.4 HyperNetwork and Implicit Decoding
 Rather than predicting point coordinates through dense deconvolution or fixed-size fully connected layers, a **Context HyperNetwork** predicts the parameters of an implicit **TargetNetwork** MLP:
-* **HyperNetwork:** Multi-layer perceptron ($384 \rightarrow 64 \rightarrow 128 \rightarrow 512 \rightarrow 1024 \rightarrow 2048$) with linear heads outputting weights and biases.
-* **TargetNetwork:** Coordinate-based implicit MLP ($3 \rightarrow 32 \rightarrow 64 \rightarrow 128 \rightarrow 64 \rightarrow 3$) mapping random points sampled continuously from a unit sphere to the reconstructed 3D surface.
+* **HyperNetwork:** Multi-layer perceptron (384 → 64 → 128 → 512 → 1024 → 2048) with linear heads outputting weights and biases.
+* **TargetNetwork:** Coordinate-based implicit MLP (3 → 32 → 64 → 128 → 64 → 3) mapping random points sampled continuously from a unit sphere to the reconstructed 3D surface.
 
 ### 2.5 Optimization Objective
 Training minimizes a combined loss function comprising Chamfer Distance (reconstruction fidelity) and Kullback-Leibler divergence (latent space regularization):
-$$\mathcal{L} = \lambda_{\text{CD}} \cdot \mathcal{L}_{\text{CD}}(P_m, \hat{P}_m) + \beta \cdot D_{\text{KL}}\left(q(z_m \mid P_m) \parallel \mathcal{N}(0, \mathbf{I})\right)$$
-where default hyperparameters follow $\lambda_{\text{CD}} = 0.05$ and $\beta = 1.0$. Training utilizes the Adam optimizer with initial learning rate $10^{-4}$ and StepLR decay ($\gamma = 0.01$ at epoch 41).
+
+$$
+\mathcal{L} = \lambda_{\text{CD}} \cdot \mathcal{L}_{\text{CD}}(\mathbf{P}_m, \hat{\mathbf{P}}_m) + \beta \cdot D_{\text{KL}}\left(q(\mathbf{z}_m \mid \mathbf{P}_m) \parallel \mathcal{N}(\mathbf{0}, \mathbf{I})\right)
+$$
+
+where default hyperparameters follow λ<sub>CD</sub> = 0.05 and β = 1.0. Training utilizes the Adam optimizer with initial learning rate 10⁻⁴ and StepLR decay (γ = 0.01 at epoch 41).
 
 ---
 
 ## 3. Quantitative Evaluation and Benchmarks
 
-Quantitative evaluation is conducted on the official test partition of the SensatUrban dataset, comprising **1,077 unseen urban blocks**. Each model generates $k = 10$ stochastic completions per partial input to evaluate both reconstruction accuracy and generative distribution properties.
+Quantitative evaluation is conducted on the official test partition of the SensatUrban dataset, comprising **1,077 unseen urban blocks**. Each model generates k = 10 stochastic completions per partial input to evaluate both reconstruction accuracy and generative distribution properties.
 
 ### 3.1 Evaluation Metrics
-* **Reconstruction Chamfer Distance (Recon CD ↓):** Pairwise squared distance between generated and ground-truth coordinates ($10^3$ scale).
+* **Reconstruction Chamfer Distance (Recon CD ↓):** Pairwise squared distance between generated and ground-truth coordinates (10³ scale).
 * **Earth Mover's Distance (Recon EMD ↓):** Optimal transport distance computed via entropy-regularized Sinkhorn iterations.
 * **Minimum Matching Distance (MMD CD ↓):** Fidelity of synthesized completions to the nearest valid test distribution samples.
-* **Total Mutual Distance (TMD ↑):** Pairwise distance among the $k$ generated variants per block, measuring multimodal sampling diversity.
-* **Jensen-Shannon Divergence (JSD ↓):** Statistical divergence between coordinate occupancy distributions over a $28^3$ voxel grid.
+* **Total Mutual Distance (TMD ↑):** Pairwise distance among the k generated variants per block, measuring multimodal sampling diversity.
+* **Jensen-Shannon Divergence (JSD ↓):** Statistical divergence between coordinate occupancy distributions over a 28³ voxel grid.
 
 ---
 
@@ -83,9 +93,9 @@ Quantitative evaluation is conducted on the official test partition of the Sensa
 | Paradigm | Architecture Details | Recon CD ↓ | Recon EMD ↓ | MMD (CD) ↓ | TMD ↑ | JSD ↓ | Best Epoch |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
 | **Baseline (No Context)** | Isolated HyperPocket (Wu et al., 2022) | 68.68 | 0.2004 | 38.58 | **62.41** | **0.1233** | 60 |
-| **PointNet $E_c$** | Context-Aware Baseline | 62.86 | **0.1989** | 40.34 | 53.65 | 0.1613 | 59 |
-| **DGCNN $E_c$** | Dynamic EdgeConv ($k=20$, Dual Pooling) | 60.10 | 0.2036 | 39.52 | 52.85 | 0.1728 | 65 |
-| **Cross-Attention $E_c$** | Set Transformer PMA ($d=256, H=4$) | **57.80** | 0.2038 | **38.21** | 47.42 | 0.1829 | 62 |
+| **PointNet E<sub>c</sub>** | Context-Aware Baseline | 62.86 | **0.1989** | 40.34 | 53.65 | 0.1613 | 59 |
+| **DGCNN E<sub>c</sub>** | Dynamic EdgeConv (k = 20, Dual Pooling) | 60.10 | 0.2036 | 39.52 | 52.85 | 0.1728 | 65 |
+| **Cross-Attention E<sub>c</sub>** | Set Transformer PMA (d = 256, H = 4) | **57.80** | 0.2038 | **38.21** | 47.42 | 0.1829 | 62 |
 
 ---
 
@@ -95,30 +105,30 @@ The table below reports all 14 evaluated model configurations, detailing the inf
 
 | Family | Experiment Key | Configuration Details | Recon CD ↓ | Recon EMD ↓ | MMD (CD) ↓ | TMD ↑ | JSD ↓ | Best Epoch |
 |:---|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Baseline Variants** | `baseline_default` | Isolated ($\lambda=0.05, \beta=1.0$) | 68.68 | 0.2004 | 38.58 | **62.41** | **0.1233** | 60 |
-| | `exp2_reduced_beta` | Isolated ($\lambda=1.0, \beta=0.001$) | 67.64 | 0.2095 | 40.73 | 37.74 | 0.2061 | 60 |
-| | `exp3_annealing` | Isolated ($\beta$-annealing $0 \rightarrow 0.001$) | 62.76 | 0.2424 | 38.64 | 36.81 | 0.3293 | 62 |
-| **PointNet $E_c$ Loss Ablations** | `exp1_context_default` | PointNet $E_c$ ($\lambda=0.05, \beta=1.0$) | 62.86 | **0.1989** | 40.34 | 53.65 | 0.1613 | 59 |
-| | `exp2_context_reduced_beta` | PointNet $E_c$ ($\lambda=1.0, \beta=0.001$) | 70.95 | 0.2313 | 40.84 | 39.95 | 0.3088 | 57 |
-| | `exp3_context_annealing` | PointNet $E_c$ ($\beta$-annealing $0 \rightarrow 0.001$) | 79.84 | 0.2643 | 47.33 | 27.74 | 0.3961 | 53 |
-| **DGCNN $E_c$ Graph Ablations** | `exp4_dgcnn_context` | EdgeConv ($k=20$, Dual Max+Avg Pooling) | 60.10 | 0.2036 | 39.52 | 52.85 | 0.1728 | 65 |
-| | `exp4a_dgcnn_k10` | Sparse Graph ($k=10$) | 68.12 | 0.1994 | 41.02 | 51.78 | 0.1347 | 58 |
-| | `exp4b_dgcnn_k40` | Dense Graph ($k=40$) | 64.38 | 0.2052 | 38.74 | 51.08 | 0.1629 | 61 |
-| | `exp4c_dgcnn_light` | Reduced Channels `[32, 32, 64, 128]` | 63.79 | 0.2128 | 38.40 | 48.40 | 0.1793 | 67 |
+| **Baseline Variants** | `baseline_default` | Isolated (λ = 0.05, β = 1.0) | 68.68 | 0.2004 | 38.58 | **62.41** | **0.1233** | 60 |
+| | `exp2_reduced_beta` | Isolated (λ = 1.0, β = 0.001) | 67.64 | 0.2095 | 40.73 | 37.74 | 0.2061 | 60 |
+| | `exp3_annealing` | Isolated (β-annealing 0 → 0.001) | 62.76 | 0.2424 | 38.64 | 36.81 | 0.3293 | 62 |
+| **PointNet E<sub>c</sub> Loss Ablations** | `exp1_context_default` | PointNet E<sub>c</sub> (λ = 0.05, β = 1.0) | 62.86 | **0.1989** | 40.34 | 53.65 | 0.1613 | 59 |
+| | `exp2_context_reduced_beta` | PointNet E<sub>c</sub> (λ = 1.0, β = 0.001) | 70.95 | 0.2313 | 40.84 | 39.95 | 0.3088 | 57 |
+| | `exp3_context_annealing` | PointNet E<sub>c</sub> (β-annealing 0 → 0.001) | 79.84 | 0.2643 | 47.33 | 27.74 | 0.3961 | 53 |
+| **DGCNN E<sub>c</sub> Graph Ablations** | `exp4_dgcnn_context` | EdgeConv (k = 20, Dual Max+Avg Pooling) | 60.10 | 0.2036 | 39.52 | 52.85 | 0.1728 | 65 |
+| | `exp4a_dgcnn_k10` | Sparse Graph (k = 10) | 68.12 | 0.1994 | 41.02 | 51.78 | 0.1347 | 58 |
+| | `exp4b_dgcnn_k40` | Dense Graph (k = 40) | 64.38 | 0.2052 | 38.74 | 51.08 | 0.1629 | 61 |
+| | `exp4c_dgcnn_light` | Reduced Channels [32, 32, 64, 128] | 63.79 | 0.2128 | 38.40 | 48.40 | 0.1793 | 67 |
 | | `exp4d_dgcnn_max_only` | Max-Only Pooling (1024D vs. 2048D) | 64.06 | 0.2012 | 38.65 | 50.00 | 0.1577 | 54 |
-| **Cross-Attention $E_c$ Ablations**| `exp5_ca_context` | Set Transformer ($d=128, H=4$) | 63.48 | 0.2058 | 39.58 | 54.53 | 0.1696 | 57 |
-| | `exp5a_ca_dim64` | Reduced Latent Dimension ($d=64, H=4$) | 60.73 | 0.2021 | **37.37** | 50.65 | 0.1687 | 61 |
-| | `exp5b_ca_dim256` | Expanded Latent Dimension ($d=256, H=4$) | **57.80** | 0.2038 | 38.21 | 47.42 | 0.1829 | 62 |
-| | `exp5c_ca_heads2` | Multi-Head Configuration ($d=128, H=2$) | 61.68 | 0.2023 | 38.65 | 49.23 | 0.1738 | 57 |
-| | `exp5d_ca_heads8` | Multi-Head Configuration ($d=128, H=8$) | 62.98 | 0.2032 | 42.13 | 55.62 | 0.1797 | 59 |
+| **Cross-Attention E<sub>c</sub> Ablations**| `exp5_ca_context` | Set Transformer (d = 128, H = 4) | 63.48 | 0.2058 | 39.58 | 54.53 | 0.1696 | 57 |
+| | `exp5a_ca_dim64` | Reduced Latent Dimension (d = 64, H = 4) | 60.73 | 0.2021 | **37.37** | 50.65 | 0.1687 | 61 |
+| | `exp5b_ca_dim256` | Expanded Latent Dimension (d = 256, H = 4) | **57.80** | 0.2038 | 38.21 | 47.42 | 0.1829 | 62 |
+| | `exp5c_ca_heads2` | Multi-Head Configuration (d = 128, H = 2) | 61.68 | 0.2023 | 38.65 | 49.23 | 0.1738 | 57 |
+| | `exp5d_ca_heads8` | Multi-Head Configuration (d = 128, H = 8) | 62.98 | 0.2032 | 42.13 | 55.62 | 0.1797 | 59 |
 
 ---
 
 ### 3.4 Findings and Discussion
-1. **Impact of Spatial Conditioning:** Incorporating spatial neighborhood context consistently reduces reconstruction error across all model types. The Cross-Attention encoder with $d=256$ achieves the lowest Chamfer Distance (**57.80**), reflecting a **15.8% reduction in error** compared to the unconditioned baseline (**68.68**).
-2. **Graph Scale in DGCNN:** Graph neighborhood size is critical. A neighborhood of $k=20$ yields optimal performance. Constraining connectivity to $k=10$ limits topological message passing (CD increases to 68.12), whereas over-aggregating with $k=40$ leads to oversmoothed representations across discrete structural boundaries (CD 64.38).
-3. **Dual Global Pooling:** Combining max-pooling and average-pooling in DGCNN provides dual sensitivity to sharp structural edges (max) and broad volume distribution (avg), yielding a $4.0$-point CD advantage over max-only pooling.
-4. **Diversity Trade-Off:** The unconditioned baseline exhibits higher sample diversity ($\text{TMD} = 62.41$) because its completions are unconstrained by local geography. Conditioning on adjacent tiles regularizes generative hallucination to remain structurally compatible with neighboring geometry, yielding focused diversity ($\text{TMD} \in [47, 55]$).
+1. **Impact of Spatial Conditioning:** Incorporating spatial neighborhood context consistently reduces reconstruction error across all model types. The Cross-Attention encoder with d = 256 achieves the lowest Chamfer Distance (**57.80**), reflecting a **15.8% reduction in error** compared to the unconditioned baseline (**68.68**).
+2. **Graph Scale in DGCNN:** Graph neighborhood size is critical. A neighborhood of k = 20 yields optimal performance. Constraining connectivity to k = 10 limits topological message passing (CD increases to 68.12), whereas over-aggregating with k = 40 leads to oversmoothed representations across discrete structural boundaries (CD 64.38).
+3. **Dual Global Pooling:** Combining max-pooling and average-pooling in DGCNN provides dual sensitivity to sharp structural edges (max) and broad volume distribution (avg), yielding a 4.0-point CD advantage over max-only pooling.
+4. **Diversity Trade-Off:** The unconditioned baseline exhibits higher sample diversity (TMD = 62.41) because its completions are unconstrained by local geography. Conditioning on adjacent tiles regularizes generative hallucination to remain structurally compatible with neighboring geometry, yielding focused diversity (TMD ∈ [47, 55]).
 
 ---
 
@@ -128,14 +138,14 @@ The table below reports all 14 evaluated model configurations, detailing the inf
 <p align="center">
   <img src="assets/teaser_reconstruction.png" alt="Reconstruction Comparison" width="90%">
   <br>
-  <em><b>Figure 2: Surface Reconstruction Comparison.</b> From left to right: Partial input point cloud ($P_e$), ground-truth target ($P_m$), and network completion ($\hat{P}_m$).</em>
+  <em><b>Figure 2: Surface Reconstruction Comparison.</b> From left to right: Partial input point cloud (P<sub>e</sub>), ground-truth target (P<sub>m</sub>), and network completion (P̂<sub>m</sub>).</em>
 </p>
 
 ### 4.2 Multimodal Generative Sampling
 <p align="center">
   <img src="assets/multimodal_variants.png" alt="Multimodal Generative Sampling" width="95%">
   <br>
-  <em><b>Figure 3: Stochastic Completion Variants.</b> Given an identical visible input ($P_e$), distinct random noise vectors $z_m \sim \mathcal{N}(0, \sigma^2 \mathbf{I})$ synthesize structurally distinct, plausible completions of missing urban geometry.</em>
+  <em><b>Figure 3: Stochastic Completion Variants.</b> Given an identical visible input (P<sub>e</sub>), distinct random latent vectors sampled from the prior synthesize structurally distinct, plausible completions of missing urban geometry.</em>
 </p>
 
 ### 4.3 Training Convergence
@@ -151,10 +161,10 @@ The table below reports all 14 evaluated model configurations, detailing the inf
 
 The experimental data is derived from the **SensatUrban** dataset (Hu et al., 2021), comprising photogrammetric and aerial LiDAR scans from the cities of Birmingham and Cambridge, UK (~2.8 billion raw points).
 
-* **Subsampling:** Raw `.ply` point clouds are voxel-grid subsampled with a grid resolution of $\delta = 0.20\,\text{m}$.
-* **Spatial Tiling:** The XY plane is partitioned into non-overlapping $30\,\text{m} \times 30\,\text{m}$ blocks. Blocks containing fewer than 512 points are excluded.
-* **Block Resampling:** Valid blocks are resampled to exactly $N = 1,024$ points via uniform sampling.
-* **Normalization:** Centroids are shifted to the origin and scaled to $[-1, 1]^3$ via maximum Euclidean radius division.
+* **Subsampling:** Raw `.ply` point clouds are voxel-grid subsampled with a grid resolution of δ = 0.20 m.
+* **Spatial Tiling:** The XY plane is partitioned into non-overlapping 30 m × 30 m blocks. Blocks containing fewer than 512 points are excluded.
+* **Block Resampling:** Valid blocks are resampled to exactly N = 1,024 points via uniform sampling.
+* **Normalization:** Centroids are shifted to the origin and scaled to [-1, 1]³ via maximum Euclidean radius division.
 * **Dataset Splits:** Following the standard benchmark split, **4,193 blocks** (37 scenes) are assigned to training and **1,077 blocks** (6 scenes) are allocated for validation and evaluation.
 
 ---
